@@ -4,6 +4,5 @@ vercel
 uvicorn
 dotenv
 PyGithub
-aiohttp==3.8.4
 openai
 Pillow
