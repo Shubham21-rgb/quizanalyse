@@ -10,3 +10,4 @@ bs4
 httpx
 requests_html
 lxml_html_clean
+playwright
