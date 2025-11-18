@@ -159,10 +159,8 @@ IMPORTANT NOTES:
 - Do NOT put the answer inside the script itself
 - Do NOT change the field names answer_byLLM and reason_byLLM
 - Script must be production-ready and executable
--headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
-it should given as header to gain access to the websites
+-headers = {{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}}
+The headers should given as header to gain access to the websites if in content you provide any website links.
 
 
 ====================
@@ -241,11 +239,78 @@ async def analyse_code(request: Request):
         message_text = resp.choices[0].message.content
         print("LLM response raw:", message_text)
 
+        # Extract Python code from the response
+        python_code = None
+        if "```python" in message_text:
+            # Extract code between ```python and ```
+            start_idx = message_text.find("```python") + len("```python")
+            end_idx = message_text.find("```", start_idx)
+            if end_idx != -1:
+                python_code = message_text[start_idx:end_idx].strip()
+        elif "```" in message_text:
+            # Try generic code block
+            start_idx = message_text.find("```") + len("```")
+            end_idx = message_text.find("```", start_idx)
+            if end_idx != -1:
+                python_code = message_text[start_idx:end_idx].strip()
+        
+        # Save to generate.py if code was extracted
+        generate_py_path = "generate.py"
+        execution_result = None
+        
+        if python_code:
+            try:
+                with open(generate_py_path, 'w', encoding='utf-8') as f:
+                    f.write(python_code)
+                print(f"✅ Saved Python code to {generate_py_path}")
+                
+                # Execute generate.py
+                print(f"🚀 Executing {generate_py_path}...")
+                import subprocess
+                result = subprocess.run(
+                    ["python3", generate_py_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=60  # 60 second timeout
+                )
+                
+                execution_result = {
+                    "returncode": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "success": result.returncode == 0
+                }
+                
+                if result.returncode == 0:
+                    print(f"✅ Successfully executed {generate_py_path}")
+                    print(f"Output:\n{result.stdout}")
+                else:
+                    print(f"❌ Execution failed with code {result.returncode}")
+                    print(f"Error:\n{result.stderr}")
+                    
+            except subprocess.TimeoutExpired:
+                execution_result = {
+                    "success": False,
+                    "error": "Execution timeout (exceeded 60 seconds)"
+                }
+                print(f"⏱️ Execution timeout")
+            except Exception as exec_error:
+                execution_result = {
+                    "success": False,
+                    "error": str(exec_error)
+                }
+                print(f"❌ Execution error: {exec_error}")
+        else:
+            print("⚠️ No Python code block found in LLM response")
+
         return JSONResponse(content={
             "status": "success",
             "model": resp.model,
             "message": message_text,
-            "question_md_path": question_md_path
+            "question_md_path": question_md_path,
+            "generate_py_path": generate_py_path if python_code else None,
+            "code_extracted": python_code is not None,
+            "execution_result": execution_result
         })
 
     except Exception as e:
