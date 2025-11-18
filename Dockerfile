@@ -22,4 +22,4 @@ EXPOSE 7476
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7476"]
 
 RUN playwright install-deps chromium
-RUN python -m playwright install chromium
+RUN playwright install --with-deps chromium
