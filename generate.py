@@ -1,62 +1,54 @@
 import requests
 from bs4 import BeautifulSoup
+import re
+import json
 
-# Define the headers to mimic a browser request
+# Set headers for all requests
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# URL to scrape
-wiki_url = "https://en.wikipedia.org/wiki/2025_Union_budget_of_India"
+# Step 1: Fetch the Wikipedia page
+wikipedia_url = "https://en.wikipedia.org/wiki/2025_Union_budget_of_India"
+try:
+    response = requests.get(wikipedia_url, headers=headers, timeout=30)
+    response.raise_for_status()
+except Exception as e:
+    print(f"Error fetching data: {e}")
+    exit(1)
 
-# Fetch the Wikipedia page
-response = requests.get(wiki_url, headers=headers)
-response.raise_for_status()  # Raise an error for bad responses
-
-# Parse the page content
+# Step 2: Parse the HTML content
 soup = BeautifulSoup(response.content, 'html.parser')
 
-# Find the largest budget/amount mentioned
-# This is a hypothetical example; you would need to adjust the selectors based on the actual HTML structure
-# For demonstration, let's assume the budget is in a specific tag
-# Here, we are looking for any relevant financial data in paragraphs or tables
-budgets = []
+# Step 3: Extract the defence budget information
+# Assuming the budget is mentioned in a paragraph or list item
+budget_text = ""
+for paragraph in soup.find_all(['p', 'li']):
+    if 'defence budget' in paragraph.get_text().lower():
+        budget_text = paragraph.get_text(strip=True)
+        break
 
-# Example of searching for budget amounts in paragraphs
-for paragraph in soup.find_all('p'):
-    if 'budget' in paragraph.text.lower():
-        budgets.append(paragraph.text)
+# Step 4: Use regex to find the budget amount
+budget_amount = re.search(r'₹[\d,]+ crore|Rs\. [\d,]+', budget_text)
+if budget_amount:
+    budget_value = budget_amount.group()
+else:
+    budget_value = "Not found"
 
-# Process the found budgets to extract amounts (this will need to be tailored to the actual content)
-# For simplicity, let's assume we found a budget amount in the text
-# This is a placeholder; you would need to implement a method to extract the actual amounts
-# For example, using regex to find currency amounts
-import re
-
-amounts = []
-for text in budgets:
-    found_amounts = re.findall(r'₹\d+ crore|Rs\. \d+', text)
-    amounts.extend(found_amounts)
-
-# Find the maximum budget amount
-max_budget = max(amounts, key=lambda x: int(re.sub(r'\D', '', x))) if amounts else None
-
-# Prepare the output in the required JSON format
-output = {
-    "answer": max_budget,
-    "url": wiki_url,
-    "reasoning": f"The maximum budget found for the 2025 Union Budget of India is {max_budget}."
+# Step 5: Format the output
+answer = {
+    "answer": budget_value,
+    "url": wikipedia_url,
+    "reasoning": "The defence budget for 2025 was extracted from the Wikipedia page using regex pattern matching."
 }
 
-# Print the output for verification
-print(output)
+print("Answer:", json.dumps(answer, indent=2))
 
-# Submission endpoint
+# Step 6: Submit the answer
 submission_url = "https://Alpha23332-ga2-6d65ad.hf.space/receiver"
-
-# Post the result to the specified endpoint
-submission_response = requests.post(submission_url, json=output, headers=headers)
-submission_response.raise_for_status()  # Raise an error for bad responses
-
-# Print submission response for confirmation
-print("Submission response:", submission_response.json())
+try:
+    submission_response = requests.post(submission_url, json=answer, headers=headers)
+    submission_response.raise_for_status()
+    print("Submission response:", submission_response.json())
+except Exception as e:
+    print(f"Error submitting data: {e}")

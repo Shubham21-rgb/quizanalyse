@@ -108,67 +108,154 @@ async def test(request: Request):
         raise BaseException()
 
 prompt="""
-You are a senior Web Scraper Analyst and Python Developer whose job is to analyze a markdown report from a scraped webpage and solve the quiz question.
+You are an expert Web Scraper Analyst and Python Developer. Your job is to analyze a markdown report from a scraped webpage and generate a WORKING Python script to solve the quiz question.
 
-You will be given a MARKDOWN REPORT (question.md) containing:
-- Extracted links, images, headings, tables, and text content from a webpage
-- A quiz question with instructions
-- Links to additional resources (PDFs, APIs, other pages)
+MARKDOWN REPORT (question.md) contains:
+- Quiz question with instructions
+- Links to external resources (PDFs, APIs, CSV, Wikipedia pages, etc.)
+- Tables with data to analyze
 - Required JSON output format
 - Submission endpoint URL
 
-Your responsibilities:
+====================
+CRITICAL REQUIREMENTS FOR THE PYTHON SCRIPT:
+====================
 
-1. READ THE MARKDOWN REPORT and identify:
-   - The quiz question in the Text Content section
-   - The required output format (usually JSON)
-   - Any links in the Links section that need to be accessed (PDFs, APIs, CSV files, etc.)
-   - The submission endpoint URL where the answer should be posted
-   - Any tables with data that need to be analyzed
-
-2. If the markdown contains links to external resources (PDF, CSV, API, etc.):
-   - Your Python script MUST fetch and process these resources
-   - Extract required data from PDFs, parse CSV/JSON, call APIs, etc.
-   - Handle different file formats appropriately
-
-3. Generate a **fully working, executable Python script** that:
-   - Imports necessary libraries (requests, pandas, PyPDF2, etc.)
-   - Fetches all required URLs/resources mentioned in the markdown
-   - Processes the data (parse tables, extract from PDFs, aggregate values, etc.)
-   - Computes the correct answer as instructed
-   - Includes proper error handling
-   - Can run successfully in Python 3
-
-4. ANALYZE and compute the answer yourself to verify correctness.
-
-5. FINAL OUTPUT FORMAT (STRICT):
-
-```python
-# Your complete Python script here
-# Make sure it's executable and handles all requirements
-# only the code should be inside this block ```python ``` should not be there
+1. **ALWAYS use proper headers for ALL HTTP requests**:
+```
+headers = {{
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}}
 ```
 
-answer_byLLM: {{"Your final computed answer here"}}
-reason_byLLM: {{"Detailed explanation of how you computed the answer, what data was used, and verification steps"}}
+2. **For Wikipedia or web scraping**:
+   - Use BeautifulSoup to parse HTML: `soup = BeautifulSoup(response.content, 'html.parser')`
+   - Search for specific elements: tables, paragraphs, spans, divs
+   - Extract text carefully: `element.get_text(strip=True)`
+   - Look for specific classes or IDs that contain the data
+   - Handle multiple formats of data (currency, numbers, dates)
 
-IMPORTANT NOTES:
-- The answer should be the actual computed value, not a placeholder
-- Follow the exact JSON format specified in the markdown
-- Include the submission URL if mentioned
-- Do NOT put the answer inside the script itself
-- Do NOT change the field names answer_byLLM and reason_byLLM
-- Script must be production-ready and executable
--headers = {{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}}
-The headers should given as header to gain access to the websites if in content you provide any website links.
+3. **For PDF files**:
+   - Use PyPDF2 or pdfplumber to extract text
+   - Parse text line by line to find required data
+   - Use regex to extract structured data
 
+4. **For CSV/JSON APIs**:
+   - Use pandas.read_csv() or requests.get().json()
+   - Process dataframes with proper filtering and aggregation
+   - Handle missing values and data types
+
+5. **Data Processing**:
+   - Clean extracted data (remove currency symbols, commas, etc.)
+   - Convert strings to appropriate types (int, float)
+   - Use regex for pattern matching: `re.findall()`, `re.search()`
+   - Aggregate data properly (sum, max, min, average)
+   - Sort and filter data correctly
+
+6. **Error Handling**:
+   - Add try-except blocks for HTTP requests
+   - Use `.raise_for_status()` after requests
+   - Handle parsing errors gracefully
+   - Print debug information to help troubleshooting
+
+7. **Output Format**:
+   - Match the EXACT JSON format specified in the question
+   - Print the answer for verification
+   - Post to the submission endpoint if provided
+
+====================
+STEP-BY-STEP APPROACH:
+====================
+
+1. **Analyze the markdown**: Identify the question, required data sources, and expected output
+2. **Plan data extraction**: Determine which URLs to fetch and what data to extract
+3. **Write the script**: Create a complete, executable Python script
+4. **Verify logic**: Ensure the computation matches the question requirements
+
+====================
+SCRIPT STRUCTURE TEMPLATE:
+====================
+
+```python
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+import re
+import json
+
+# Set headers for all requests
+headers = {{
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}}
+
+# Step 1: Fetch external resources
+try:
+    response = requests.get("URL_HERE", headers=headers, timeout=30)
+    response.raise_for_status()
+except Exception as e:
+    print(f"Error fetching data: {{e}}")
+    exit(1)
+
+# Step 2: Parse the data
+soup = BeautifulSoup(response.content, 'html.parser')
+
+# Step 3: Extract specific information
+# For tables: soup.find_all('table')
+# For specific elements: soup.find('tag', class_='classname')
+# Extract text: element.get_text(strip=True)
+
+# Step 4: Process and compute the answer
+# Clean data, convert types, aggregate, etc.
+
+# Step 5: Format output
+answer = {{
+    "field1": "value1",
+    "field2": "value2"
+}}
+
+print("Answer:", json.dumps(answer, indent=2))
+
+# Step 6: Submit if endpoint provided
+# submission_url = "URL_HERE"
+# response = requests.post(submission_url, json=answer, headers=headers)
+# print("Submission response:", response.json())
+```
+
+====================
+OUTPUT FORMAT (STRICT):
+====================
+
+First, provide the complete Python script in a code block:
+
+```python
+# Complete working Python script here
+# DO NOT include placeholder comments like "extract data here"
+# Write the ACTUAL implementation
+```
+
+Then provide your analysis:
+
+answer_byLLM: {{"Your computed answer as a JSON object"}}
+reason_byLLM: {{"Detailed step-by-step explanation of: (1) What data sources you used, (2) How you extracted the data, (3) What computation you performed, (4) Why this is the correct answer"}}
+
+====================
+IMPORTANT REMINDERS:
+====================
+- The script MUST be executable without modifications
+- ALWAYS use headers in requests
+- Handle errors properly
+- Parse HTML/data carefully with specific selectors
+- Clean and convert data types before computation
+- Print intermediate results for debugging
+- Match the exact output format from the question
+- DO NOT use placeholders - write complete implementation
 
 ====================
 QUESTION.MD CONTENT:
 {content}
 ====================
 
-
+Now generate the complete Python script to solve this quiz question.
 """
 
 
@@ -218,7 +305,7 @@ async def analyse_code(request: Request):
     try:
         print("@@@@@@@@@@@@@@@@@@@@@@@")
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": prompt_final},
                 {"role": "user", "content": "Please provide the python script to solve the quiz as per the above requirements."}

@@ -15,15 +15,15 @@
 - **Total Images:** 0
 - **Total Headings:** 1
 - **Total Tables:** 0
-- **HTML Length:** 3,847 characters
-- **Text Content Length:** 793 characters
+- **HTML Length:** 3,827 characters
+- **Text Content Length:** 772 characters
 
 
 ---
 
 ## 📋 Headings (1)
 
-1. **H1:** Instruction — Find max budget (2025)
+1. **H1:** Find the defence buget for 2025
 
 ---
 
@@ -37,9 +37,9 @@
 
 ```
 Find max budget (2025) — instruction
-Instruction — Find max budget (2025)
-Open the Wikipedia page below and find locate the largest budget/amount mentioned for the
-2025 Union Budget of India
+Find the defence buget for 2025
+Open the Wikipedia page below and find  budget/amount mentioned for the
+2025 Defence Budget Of INDIA
 . Then return the result in the simple JSON format shown.
 post your answer to https://Alpha23332-ga2-6d65ad.hf.space/receiver
 Source page:
