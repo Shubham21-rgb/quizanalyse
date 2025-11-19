@@ -121,19 +121,44 @@ MARKDOWN REPORT (question.md) contains:
 CRITICAL REQUIREMENTS FOR THE PYTHON SCRIPT:
 ====================
 
-1. **ALWAYS use proper headers for ALL HTTP requests**:
-```
-headers = {{
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}}
-```
+1. **For scraping additional webpages (Wikipedia, external sites, etc.)**:
+   - ALWAYS use the LLMScraperHandler to scrape webpages
+   - Import: `from LLMFunc import LLMScraperHandler`
+   - Usage pattern:
+   ```python
+   import asyncio
+   from LLMFunc import LLMScraperHandler
+   
+   async def scrape_url(url):
+       handler = LLMScraperHandler()
+       scrape_request = {{
+           "url": url,
+           "force_dynamic": True
+       }}
+       result = await handler.handle_request(scrape_request)
+       if result.get('success'):
+           markdown = handler.format_as_markdown(result)
+           return markdown
+       else:
+           print(f"Scraping failed: {{result.get('error')}}")
+           return None
+   
+   # Use asyncio.run() to execute async function
+   markdown_data = asyncio.run(scrape_url("YOUR_URL_HERE"))
+   ```
+   - Parse the markdown output to extract required data
+   - DO NOT use requests + BeautifulSoup directly for webpage scraping
+   - Use LLMScraperHandler for ALL webpage URLs (Wikipedia, external sites, etc.)
 
-2. **For Wikipedia or web scraping**:
-   - Use BeautifulSoup to parse HTML: `soup = BeautifulSoup(response.content, 'html.parser')`
-   - Search for specific elements: tables, paragraphs, spans, divs
-   - Extract text carefully: `element.get_text(strip=True)`
-   - Look for specific classes or IDs that contain the data
-   - Handle multiple formats of data (currency, numbers, dates)
+2. **For API endpoints (JSON/CSV data)**:
+   - Use requests with proper headers for APIs that return JSON/CSV
+   ```python
+   headers = {{
+       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+   }}
+   ```
+   - For CSV: `pandas.read_csv(url)` or `requests.get(url, headers=headers)`
+   - For JSON APIs: `requests.get(url, headers=headers).json()`
 
 3. **For PDF files**:
    - Use PyPDF2 or pdfplumber to extract text
@@ -176,49 +201,81 @@ STEP-BY-STEP APPROACH:
 SCRIPT STRUCTURE TEMPLATE:
 ====================
 
+**FOR WEBPAGE SCRAPING (Wikipedia, external sites):**
+```python
+import asyncio
+import requests
+import json
+import re
+from LLMFunc import LLMScraperHandler
+
+async def scrape_url(url):
+    handler = LLMScraperHandler()
+    scrape_request = {{
+        "url": url,
+        "force_dynamic": True
+    }}
+    result = await handler.handle_request(scrape_request)
+    if result.get('success'):
+        markdown = handler.format_as_markdown(result)
+        return markdown
+    else:
+        print(f"Scraping failed: {{result.get('error')}}")
+        return None
+
+# Scrape the webpage
+url = "YOUR_WIKIPEDIA_OR_WEBPAGE_URL"
+markdown_data = asyncio.run(scrape_url(url))
+
+if markdown_data:
+    # Parse the markdown to extract required data
+    # Look for patterns, numbers, tables in the markdown text
+    # Example: Extract all numbers
+    numbers = re.findall(r'[\d,]+', markdown_data)
+    
+    # Process and compute answer
+    # ... your logic here ...
+    
+    # Format output
+    answer = {{
+        "field1": "value1",
+        "field2": "value2"
+    }}
+    
+    print("Answer:", json.dumps(answer, indent=2))
+    
+    # Submit if endpoint provided
+    submission_url = "YOUR_SUBMISSION_URL"
+    headers = {{
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }}
+    response = requests.post(submission_url, json=answer, headers=headers)
+    print("Submission response:", response.json())
+```
+
+**FOR API/CSV DATA:**
 ```python
 import requests
-from bs4 import BeautifulSoup
 import pandas as pd
-import re
 import json
 
-# Set headers for all requests
 headers = {{
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }}
 
-# Step 1: Fetch external resources
-try:
-    response = requests.get("URL_HERE", headers=headers, timeout=30)
-    response.raise_for_status()
-except Exception as e:
-    print(f"Error fetching data: {{e}}")
-    exit(1)
+# For CSV files
+df = pd.read_csv("CSV_URL_HERE")
 
-# Step 2: Parse the data
-soup = BeautifulSoup(response.content, 'html.parser')
+# For JSON APIs
+response = requests.get("API_URL_HERE", headers=headers)
+data = response.json()
 
-# Step 3: Extract specific information
-# For tables: soup.find_all('table')
-# For specific elements: soup.find('tag', class_='classname')
-# Extract text: element.get_text(strip=True)
+# Process data
+# ... your logic here ...
 
-# Step 4: Process and compute the answer
-# Clean data, convert types, aggregate, etc.
-
-# Step 5: Format output
-answer = {{
-    "field1": "value1",
-    "field2": "value2"
-}}
-
+# Format and submit answer
+answer = {{"field": "value"}}
 print("Answer:", json.dumps(answer, indent=2))
-
-# Step 6: Submit if endpoint provided
-# submission_url = "URL_HERE"
-# response = requests.post(submission_url, json=answer, headers=headers)
-# print("Submission response:", response.json())
 ```
 
 ====================
@@ -242,13 +299,17 @@ reason_byLLM: {{"Detailed step-by-step explanation of: (1) What data sources you
 IMPORTANT REMINDERS:
 ====================
 - The script MUST be executable without modifications
-- ALWAYS use headers in requests
-- Handle errors properly
-- Parse HTML/data carefully with specific selectors
+- For WEBPAGES: Use LLMScraperHandler (import from LLMFunc)
+- For APIs/CSV: Use requests with headers or pandas
+- DO NOT use BeautifulSoup + requests for webpage scraping
+- Use asyncio.run() when calling LLMScraperHandler
+- Parse the markdown output from LLMScraperHandler to extract data
+- Handle errors properly with try-except blocks
 - Clean and convert data types before computation
 - Print intermediate results for debugging
 - Match the exact output format from the question
 - DO NOT use placeholders - write complete implementation
+- Test your regex patterns and data extraction logic
 
 ====================
 QUESTION.MD CONTENT:
