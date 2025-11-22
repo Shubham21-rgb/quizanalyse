@@ -15,10 +15,11 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python modules
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip uninstall -y websockets && pip install websockets==10.4
 
-# Install Playwright engine + dependencies automatically
-RUN playwright install --with-deps chromium
+# ---- REMOVE playwright install step ----
+# RUN playwright install --with-deps chromium   ❌ delete this line
 
 # Create non-root user
 RUN useradd -m -u 1000 user
@@ -26,7 +27,6 @@ USER user
 
 ENV PATH="/home/user/.local/bin:$PATH"
 
-# Copy app
 COPY --chown=user . .
 
 EXPOSE 7476
