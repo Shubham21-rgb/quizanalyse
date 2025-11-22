@@ -11,4 +11,6 @@ httpx
 requests_html
 lxml_html_clean
 playwright
+requests-html==0.10.0
+pyppeteer==1.0.2
 websockets==10.4
