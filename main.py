@@ -512,7 +512,7 @@ async def analyse_code(request: Request):
         "force_dynamic": force_dynamic
     }
     scrape_result = await handler.handle_request(scrape_request)
-    
+    print("SCRAPE RESULT:", scrape_result)
     if not scrape_result.get('success'):
         return JSONResponse(
             status_code=400, 
