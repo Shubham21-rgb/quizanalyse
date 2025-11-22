@@ -259,11 +259,29 @@ class WebScraper:
             if table_data['rows'] or table_data['headers']:
                 tables.append(table_data)
         
-        # Note audio files for transcription (don't auto-transcribe to avoid dependency issues)
+        # Transcribe audio files if found
         audio_transcriptions = []
         if audio_elements:
             print(f"🎵 Found {len(audio_elements)} audio element(s) on the page")
-            print(f"  Audio files will be listed in markdown for LLM to transcribe")
+            for idx, audio in enumerate(audio_elements, 1):
+                print(f"  Transcribing audio {idx}: {audio['src']}")
+                try:
+                    audio_response = self.session.get(audio['src'], timeout=30)
+                    audio_response.raise_for_status()
+                    transcription = self._transcribe_audio(audio_response.content, audio['src'])
+                    audio_transcriptions.append({
+                        'url': audio['src'],
+                        'transcription': transcription,
+                        'status': 'success' if not transcription.startswith('[Error') else 'failed'
+                    })
+                    print(f"  ✅ Transcription complete for audio {idx}")
+                except Exception as e:
+                    print(f"  ❌ Failed to transcribe audio {idx}: {e}")
+                    audio_transcriptions.append({
+                        'url': audio['src'],
+                        'transcription': f"[Error: Failed to download or transcribe: {str(e)}]",
+                        'status': 'failed'
+                    })
         
         return {
             'url': url,
