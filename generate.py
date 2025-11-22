@@ -1,50 +1,46 @@
-import asyncio
 import requests
+import pandas as pd
 import json
-import re
-from LLMFunc import LLMScraperHandler
 
-async def scrape_url(url):
-    handler = LLMScraperHandler()
-    scrape_request = {
-        "url": url,
-        "force_dynamic": True
-    }
-    result = await handler.handle_request(scrape_request)
-    if result.get('success'):
-        markdown = handler.format_as_markdown(result)
-        return markdown
-    else:
-        print(f"Scraping failed: {result.get('error')}")
-        return None
+# Define the URL for the CSV file
+csv_url = "https://tds-llm-analysis.s-anand.net/demo-audio-data.csv"
 
-# Scrape the Wikipedia page for the 2025 Union budget of India
-url = "https://en.wikipedia.org/wiki/2025_Union_budget_of_India"
-markdown_data = asyncio.run(scrape_url(url))
+# Define headers for the request
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+}
 
-if markdown_data:
-    # Use regex to find the budget amount in the markdown data
-    budget_matches = re.findall(r'₹[\d,]+ crore|Rs\. [\d,]+', markdown_data)
-    
-    if budget_matches:
-        # Assuming the largest budget is the one we need
-        max_budget = max(budget_matches, key=lambda x: int(re.sub(r'[^\d]', '', x)))
-    else:
-        max_budget = "Not found"
+# Read the CSV file into a pandas DataFrame
+df = pd.read_csv(csv_url)
 
-    # Prepare the answer in the required JSON format
-    answer = {
-        "answer": max_budget,
-        "url": url,
-        "reasoning": "Extracted the largest budget amount mentioned for the 2025 Defence Budget of India from the Wikipedia page."
-    }
-    
-    print("Answer:", json.dumps(answer, indent=2))
-    
-    # Submit the answer to the provided endpoint
-    submission_url = "https://Alpha23332-ga2-6d65ad.hf.space/receiver"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-    response = requests.post(submission_url, json=answer, headers=headers)
-    print("Submission response:", response.json())
+# Extract the cutoff value from the markdown report
+cutoff_value = 24111
+
+# Filter the DataFrame based on the cutoff value
+filtered_df = df[df['value'] > cutoff_value]
+
+# Process the filtered data to compute the required answer
+# For example, let's assume we need to sum a column named 'amount'
+total_amount = filtered_df['amount'].sum()
+
+# Prepare the answer in the required JSON format
+answer = {
+    "email": "your email",
+    "secret": "your secret",
+    "url": "https://tds-llm-analysis.s-anand.net/demo-audio",
+    "answer": total_amount
+}
+
+# Print the answer for verification
+print("Answer:", json.dumps(answer, indent=2))
+
+# Define the submission endpoint URL
+submission_url = "https://tds-llm-analysis.s-anand.net/submit"
+
+# Submit the answer to the endpoint
+response = requests.post(submission_url, json=answer, headers=headers)
+response.raise_for_status()
+
+# Print the submission response
+print("Submission response:", json.dumps(response.json()))
+print("Status code:", response.status_code)

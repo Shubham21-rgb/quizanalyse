@@ -11,3 +11,8 @@ httpx
 requests_html
 lxml_html_clean
 playwright
+SpeechRecognition
+pydub
+PyPDF2
+pytesseract
+python-dotenv

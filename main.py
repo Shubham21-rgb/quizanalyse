@@ -185,8 +185,11 @@ CRITICAL REQUIREMENTS FOR THE PYTHON SCRIPT:
 
 7. **Output Format**:
    - Match the EXACT JSON format specified in the question
-   - Print the answer for verification
+   - Print the answer for verification before submission
    - Post to the submission endpoint if provided
+   - ALWAYS print the submission response with label "Submission response:" followed by the JSON
+   - Example: `print("Submission response:", response.json())`
+   - This is critical for extracting next URLs if the server sends them
 
 ====================
 STEP-BY-STEP APPROACH:
@@ -250,7 +253,11 @@ if markdown_data:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }}
     response = requests.post(submission_url, json=answer, headers=headers)
-    print("Submission response:", response.json())
+    response.raise_for_status()
+    
+    # CRITICAL: Print submission response with this exact format
+    print("Submission response:", json.dumps(response.json()))
+    print("Status code:", response.status_code)
 ```
 
 **FOR API/CSV DATA:**
@@ -276,6 +283,15 @@ data = response.json()
 # Format and submit answer
 answer = {{"field": "value"}}
 print("Answer:", json.dumps(answer, indent=2))
+
+# Submit to endpoint
+submission_url = "YOUR_SUBMISSION_URL"
+response = requests.post(submission_url, json=answer, headers=headers)
+response.raise_for_status()
+
+# CRITICAL: Print submission response with this exact format
+print("Submission response:", json.dumps(response.json()))
+print("Status code:", response.status_code)
 ```
 
 ====================
@@ -405,6 +421,7 @@ async def analyse_code(request: Request):
         # Save to generate.py if code was extracted
         generate_py_path = "generate.py"
         execution_result = None
+        next_url = None
         
         if python_code:
             try:
@@ -432,6 +449,69 @@ async def analyse_code(request: Request):
                 if result.returncode == 0:
                     print(f"✅ Successfully executed {generate_py_path}")
                     print(f"Output:\n{result.stdout}")
+                    
+                    # Try to extract next URL from submission response
+                    # Look for JSON in stdout that contains "url" field
+                    try:
+                        import re
+                        stdout_lines = result.stdout
+                        
+                        # Try to find "Submission response:" line
+                        if "Submission response:" in stdout_lines:
+                            # Extract text after "Submission response:"
+                            json_start = stdout_lines.find("Submission response:") + len("Submission response:")
+                            remaining_text = stdout_lines[json_start:].strip()
+                            
+                            # Try to extract JSON from the line
+                            # Handle both single-line and multi-line JSON
+                            try:
+                                # Try first line
+                                first_line = remaining_text.split('\n')[0].strip()
+                                submission_response = json.loads(first_line)
+                                if isinstance(submission_response, dict) and "url" in submission_response:
+                                    next_url = submission_response["url"]
+                                    print(f"🔗 Found next URL in submission response: {next_url}")
+                            except json.JSONDecodeError:
+                                # Try to find JSON object with curly braces
+                                json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', remaining_text)
+                                if json_match:
+                                    submission_response = json.loads(json_match.group(0))
+                                    if isinstance(submission_response, dict) and "url" in submission_response:
+                                        next_url = submission_response["url"]
+                                        print(f"🔗 Found next URL in submission response: {next_url}")
+                        
+                        # If not found yet, search for any JSON with "url" field in entire output
+                        if not next_url:
+                            # Find all potential JSON objects (nested aware)
+                            json_pattern = r'\{(?:[^{}]|\{[^{}]*\})*\}'
+                            json_matches = re.findall(json_pattern, stdout_lines)
+                            
+                            for json_str in json_matches:
+                                try:
+                                    parsed = json.loads(json_str)
+                                    if isinstance(parsed, dict) and "url" in parsed:
+                                        next_url = parsed["url"]
+                                        print(f"🔗 Found next URL: {next_url}")
+                                        break
+                                except json.JSONDecodeError:
+                                    continue
+                        
+                        # Also try to find URL patterns directly if JSON parsing fails
+                        if not next_url:
+                            url_pattern = r'https?://[^\s<>"\'{}|\\^`\[\]]+(?:/[^\s<>"\'{}|\\^`\[\]]*)?'
+                            urls_in_output = re.findall(url_pattern, stdout_lines)
+                            # Look for URLs that appear after "Submission response" or similar indicators
+                            if urls_in_output and "Submission response" in stdout_lines:
+                                response_start = stdout_lines.find("Submission response")
+                                for url_candidate in urls_in_output:
+                                    if stdout_lines.find(url_candidate) > response_start:
+                                        next_url = url_candidate
+                                        print(f"🔗 Found URL pattern in response: {next_url}")
+                                        break
+                                        
+                    except Exception as parse_error:
+                        print(f"⚠️ Could not parse submission response for next URL: {parse_error}")
+                        print(f"📋 Stdout content:\n{result.stdout[:500]}...")
                 else:
                     print(f"❌ Execution failed with code {result.returncode}")
                     print(f"Error:\n{result.stderr}")
@@ -451,6 +531,34 @@ async def analyse_code(request: Request):
         else:
             print("⚠️ No Python code block found in LLM response")
 
+        # If next_url found, trigger another /analyse call
+        if next_url:
+            print(f"\n{'='*50}")
+            print(f"🔄 Triggering next iteration with URL: {next_url}")
+            print(f"{'='*50}\n")
+            
+            # Recursively call analyse_code with the next URL
+            next_request = Request(scope=request.scope)
+            next_request._body = json.dumps({
+                "url": next_url,
+                "force_dynamic": force_dynamic
+            }).encode()
+            
+            # Call analyse_code recursively
+            next_result = await analyse_code(next_request)
+            
+            return JSONResponse(content={
+                "status": "success",
+                "model": resp.model,
+                "message": message_text,
+                "question_md_path": question_md_path,
+                "generate_py_path": generate_py_path if python_code else None,
+                "code_extracted": python_code is not None,
+                "execution_result": execution_result,
+                "next_url": next_url,
+                "next_iteration_result": next_result.body.decode() if hasattr(next_result, 'body') else str(next_result)
+            })
+        
         return JSONResponse(content={
             "status": "success",
             "model": resp.model,
@@ -458,7 +566,9 @@ async def analyse_code(request: Request):
             "question_md_path": question_md_path,
             "generate_py_path": generate_py_path if python_code else None,
             "code_extracted": python_code is not None,
-            "execution_result": execution_result
+            "execution_result": execution_result,
+            "completed": True,
+            "message": "No more URLs to process - task completed"
         })
 
     except Exception as e:
