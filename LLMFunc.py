@@ -158,6 +158,20 @@ class WebScraper:
         """
         soup = BeautifulSoup(html, 'html.parser')
         
+        # Extract audio elements BEFORE removing script tags
+        audio_elements = []
+        for audio_tag in soup.find_all('audio'):
+            src = audio_tag.get('src')
+            if src:
+                # Make absolute URL
+                if not src.startswith(('http://', 'https://')):
+                    from urllib.parse import urljoin
+                    src = urljoin(url, src)
+                audio_elements.append({
+                    'src': src,
+                    'controls': audio_tag.has_attr('controls')
+                })
+        
         # Remove script and style tags
         for tag in soup(['script', 'style', 'noscript']):
             tag.decompose()
@@ -245,6 +259,12 @@ class WebScraper:
             if table_data['rows'] or table_data['headers']:
                 tables.append(table_data)
         
+        # Note audio files for transcription (don't auto-transcribe to avoid dependency issues)
+        audio_transcriptions = []
+        if audio_elements:
+            print(f"🎵 Found {len(audio_elements)} audio element(s) on the page")
+            print(f"  Audio files will be listed in markdown for LLM to transcribe")
+        
         return {
             'url': url,
             'title': title.get_text(strip=True) if title else None,
@@ -256,52 +276,73 @@ class WebScraper:
             'tables': tables,  # NEW: Table data
             'structured_data': structured_data,
             'html_length': len(html),
-            'raw_html': html  # NEW: Raw HTML content
+            'raw_html': html,  # NEW: Raw HTML content
+            'audio_elements': audio_elements,  # NEW: Audio elements found
+            'audio_transcriptions': audio_transcriptions  # NEW: Transcribed audio
         }
     
     def _transcribe_audio(self, audio_content: bytes, url: str) -> str:
         """
         Transcribe audio file using speech_recognition
         """
+        tmp_audio_path = None
+        wav_path = None
+        
         try:
             import speech_recognition as sr
             from pydub import AudioSegment
             import tempfile
             import os
             
-            # Save audio to temp file
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_audio:
+            # Detect file extension from URL
+            file_ext = '.mp3'
+            if url.endswith('.opus'):
+                file_ext = '.opus'
+            elif url.endswith('.ogg'):
+                file_ext = '.ogg'
+            elif url.endswith('.wav'):
+                file_ext = '.wav'
+            elif url.endswith('.m4a'):
+                file_ext = '.m4a'
+            
+            # Save audio to temp file with correct extension
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_audio:
                 tmp_audio.write(audio_content)
                 tmp_audio_path = tmp_audio.name
             
-            try:
-                # Convert to WAV format (required for speech_recognition)
-                audio = AudioSegment.from_file(tmp_audio_path)
-                wav_path = tmp_audio_path.replace('.mp3', '.wav')
-                audio.export(wav_path, format='wav')
-                
-                # Transcribe
-                recognizer = sr.Recognizer()
-                with sr.AudioFile(wav_path) as source:
-                    audio_data = recognizer.record(source)
-                    text = recognizer.recognize_google(audio_data)
-                    return text
+            # Convert to WAV format (required for speech_recognition)
+            audio = AudioSegment.from_file(tmp_audio_path)
+            wav_path = tmp_audio_path.replace(file_ext, '.wav')
+            audio.export(wav_path, format='wav')
+            
+            # Transcribe
+            recognizer = sr.Recognizer()
+            with sr.AudioFile(wav_path) as source:
+                audio_data = recognizer.record(source)
+                text = recognizer.recognize_google(audio_data)
+                return text
                     
-            finally:
-                # Cleanup temp files
-                if os.path.exists(tmp_audio_path):
-                    os.remove(tmp_audio_path)
-                if os.path.exists(wav_path):
-                    os.remove(wav_path)
-                    
-        except ImportError:
-            return "[Error: speech_recognition or pydub library not installed. Install with: pip install SpeechRecognition pydub]"
+        except ImportError as e:
+            return f"[Error: Required library not installed - {str(e)}. Install with: pip install SpeechRecognition pydub]"
         except sr.UnknownValueError:
             return "[Error: Google Speech Recognition could not understand the audio]"
         except sr.RequestError as e:
             return f"[Error: Could not request results from Google Speech Recognition service: {e}]"
         except Exception as e:
             return f"[Error transcribing audio: {str(e)}]"
+        finally:
+            # Cleanup temp files
+            import os
+            if tmp_audio_path and os.path.exists(tmp_audio_path):
+                try:
+                    os.remove(tmp_audio_path)
+                except:
+                    pass
+            if wav_path and os.path.exists(wav_path):
+                try:
+                    os.remove(wav_path)
+                except:
+                    pass
     
     async def _handle_special_content(self, url: str, content_type: str) -> Dict[str, Any]:
         """
@@ -694,6 +735,79 @@ class LLMScraperHandler:
                     for i, row in enumerate(table['rows'], 1):
                         md.append(f"**Row {i}:** {' | '.join(row)}")
                 md.append("")
+            md.append("\n---\n")
+        
+        # Audio Elements (for audio embedded in webpages)
+        if data.get('audio_elements'):
+            md.append(f"## 🎵 Audio Files Found on Page ({len(data['audio_elements'])})\n")
+            md.append("\n**⚠️ IMPORTANT: Audio files detected that need transcription!**\n")
+            md.append("\n**Instructions for LLM:**")
+            md.append("- Audio elements were found embedded in the webpage")
+            md.append("- You MUST download and transcribe these audio files")
+            md.append("- The audio likely contains important instructions or data for solving the quiz")
+            md.append("- Use the following code to transcribe the audio:\n")
+            
+            for idx, audio_elem in enumerate(data['audio_elements'], 1):
+                md.append(f"\n### Audio #{idx}\n")
+                md.append(f"**Audio URL:** `{audio_elem['src']}`\n")
+                md.append("\n**Python Code to Transcribe:**")
+                md.append("```python")
+                md.append("import requests")
+                md.append("import speech_recognition as sr")
+                md.append("from pydub import AudioSegment")
+                md.append("import tempfile")
+                md.append("import os")
+                md.append("")
+                md.append("# Download audio file")
+                md.append("headers = {")
+                md.append("    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'")
+                md.append("}")
+                md.append(f"audio_url = '{audio_elem['src']}'")
+                md.append("response = requests.get(audio_url, headers=headers)")
+                md.append("response.raise_for_status()")
+                md.append("")
+                md.append("# Save to temp file (detect extension)")
+                md.append("file_ext = audio_url.split('.')[-1] if '.' in audio_url else 'mp3'")
+                md.append("with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{{file_ext}}') as tmp:")
+                md.append("    tmp.write(response.content)")
+                md.append("    tmp_path = tmp.name")
+                md.append("")
+                md.append("try:")
+                md.append("    # Convert to WAV format")
+                md.append("    audio = AudioSegment.from_file(tmp_path)")
+                md.append("    wav_path = tmp_path.replace(f'.{{file_ext}}', '.wav')")
+                md.append("    audio.export(wav_path, format='wav')")
+                md.append("    ")
+                md.append("    # Transcribe using Google Speech Recognition")
+                md.append("    recognizer = sr.Recognizer()")
+                md.append("    with sr.AudioFile(wav_path) as source:")
+                md.append("        audio_data = recognizer.record(source)")
+                md.append("        transcription = recognizer.recognize_google(audio_data)")
+                md.append("    ")
+                md.append("    print(f'Audio Transcription: {{transcription}}')")
+                md.append("    ")
+                md.append("    # Clean up")
+                md.append("    os.remove(tmp_path)")
+                md.append("    os.remove(wav_path)")
+                md.append("except Exception as e:")
+                md.append("    print(f'Transcription error: {{e}}')")
+                md.append("    # Cleanup on error")
+                md.append("    if os.path.exists(tmp_path):")
+                md.append("        os.remove(tmp_path)")
+                md.append("```\n")
+                md.append("\n**Alternative: Use LLMScraperHandler to get transcription**")
+                md.append("The audio file will be automatically transcribed if you use the scraper.\n")
+            
+            # Also show transcriptions if available
+            if data.get('audio_transcriptions'):
+                for idx, audio_data in enumerate(data['audio_transcriptions'], 1):
+                    transcription = audio_data['transcription']
+                    if not transcription.startswith('[Error'):
+                        md.append(f"\n**✅ Pre-transcribed Audio #{idx}:**")
+                        md.append("```")
+                        md.append(transcription)
+                        md.append("```\n")
+            
             md.append("\n---\n")
         
         # Structured Data
