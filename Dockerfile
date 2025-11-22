@@ -1,31 +1,35 @@
 FROM python:3.9-slim
 
-# Install required OS dependencies for Playwright first
-RUN apt-get update && apt-get install -y \
-    wget gnupg libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-    libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libasound2 \
-    libpangocairo-1.0-0 libpango-1.0-0 libcairo2 libx11-xcb1 libx11-6 \
+# Install system dependencies required for Playwright/Chromium
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget gnupg ca-certificates curl git \
+    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 \
+    libasound2 libpangocairo-1.0-0 libpango-1.0-0 libcairo2 \
+    libx11-xcb1 libx11-6 libgconf-2-4 libxss1 libxcursor1 \
+    libdrm2 libgbm1 fonts-liberation ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy and install dependencies (while still root)
+# Copy requirements before app files for caching
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browser runtime + deps
+# Install Playwright browsers
 RUN playwright install --with-deps chromium
 
-# Create user AFTER dependencies are installed
+# Create non-root user AFTER heavy installs
 RUN useradd -m -u 1000 user
 USER user
 
 ENV PATH="/home/user/.local/bin:$PATH"
 
-# Copy project files as non-root user
+# Copy project files with user permissions
 COPY --chown=user . .
 
 EXPOSE 7476
 
-# Start FastAPI server
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7476"]
