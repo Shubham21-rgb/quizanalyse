@@ -1,60 +1,172 @@
-# Web Scraping Report
-
-**URL:** http://localhost:5500/demo.html
-
-**Method:** dynamic
-
-**Title:** Find max budget (2025) — instruction
+# 📋 Quiz Page Analysis Report
 
 
----
-
-## 📈 Statistics
-
-- **Total Links:** 1
-- **Total Images:** 0
-- **Total Headings:** 1
-- **Total Tables:** 0
-- **HTML Length:** 3,827 characters
-- **Text Content Length:** 772 characters
+⚠️ **CRITICAL**: This report contains ALL extracted data from the quiz page.
 
 
----
+## 🎯 Quick Navigation Guide
 
-## 📋 Headings (1)
+1. **Read SECTION 1 (Text Content)** → Understand what the quiz is asking
 
-1. **H1:** Find the defence buget for 2025
+2. **Check URL Parameters** → Email, ID, or other values needed for submission
 
----
+3. **Look for data sources:**
 
-## 🔗 Links (1)
+   - SECTION 2 (Links) → External files, APIs, data endpoints
 
-1. [Open Wikipedia article](https://en.wikipedia.org/wiki/2025_Union_budget_of_India)
+   - SECTION 3 (Tables) → Structured tabular data
 
----
+   - SECTION 6 (Raw HTML) → JavaScript variables, hidden data, Base64
 
-## 📄 Text Content
+4. **Find submission endpoint** → Look for POST URLs in SECTION 2 or forms in SECTION 6
 
-```
-Find max budget (2025) — instruction
-Find the defence buget for 2025
-Open the Wikipedia page below and find  budget/amount mentioned for the
-2025 Defence Budget Of INDIA
-. Then return the result in the simple JSON format shown.
-post your answer to https://Alpha23332-ga2-6d65ad.hf.space/receiver
-Source page:
-Open Wikipedia article
-Required output format (exact):
+5. **Extract/Process data** → Use appropriate method (scraping, API call, data extraction)
+
+6. **Format answer** → Match exact JSON structure required
+
+7. **Submit** → POST to the submission endpoint
+
+
+## 🌐 Page Metadata
+
+- **Original URL:** https://tds-llm-analysis.s-anand.net/demo-scrape?email=23f2003481%40ds.study.iitm.ac.in&id=8655
+
+- **Content Type:** WEBPAGE
+
+- **Scraping Method:** dynamic
+
+
+### 🔗 URL Components:
+
+- **Scheme:** https
+
+- **Domain:** tds-llm-analysis.s-anand.net
+
+- **Path:** /demo-scrape
+
+
+### 🔑 URL Query Parameters (⚠️ IMPORTANT for task!):
+
+- **email:** `23f2003481@ds.study.iitm.ac.in`
+
+  ⚡ *This parameter may be required for submission!*
+
+- **id:** `8655`
+
+  ⚡ *This parameter may be required for submission!*
+
+
+================================================================================
+
+
+## 📝 SECTION 1: Page Text Content
+
+**→ This section contains the visible text and instructions from the quiz page.**
+
+**⚠️ READ THIS FIRST to understand what the task is asking!**
+
+
+**🎯 Detected Task Keywords:** submit, post, scrape
+
+
+```text
+
+Scrape
+/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in
+(relative to this page).
+Get the secret code from this page.
+POST the secret code back to
+/submit
 {
-  "answer": Provide that here,
-  "url": "https://en.wikipedia.org/wiki/2025_Union_budget_of_India"
-  "reasoning": Provide your reasoning here
+  "email": "23f2003481@ds.study.iitm.ac.in",
+  "secret": "your secret",
+  "url": "this page's URL",
+  "answer": "the secret code you scraped"
 }
-Notes:
-You do not need to compute or parse anything on this page — only open the source and fill the
-answer
-field with the largest budget/amount found (preserve units, e.g., "₹X crore" or "Rs. Y").
-The
-url
-field must remain exactly the Wikipedia URL shown above.
 ```
+
+
+## 🔗 SECTION 2: All Links Found
+
+**→ Links to data files, APIs, or other pages mentioned in the quiz.**
+
+**⚠️ If task asks to 'scrape' or 'fetch' data, check these URLs!**
+
+
+### ⚡ SUBMISSION ENDPOINTS (CRITICAL!):
+
+1. **[/submit](https://tds-llm-analysis.s-anand.net/submit)**
+
+   - Full URL: `https://tds-llm-analysis.s-anand.net/submit`
+
+
+⚠️ **Use these URLs to POST your answer!**
+
+
+### 🔗 Other Links:
+
+1. /demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in → https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in
+
+
+## 📊 SECTION 3: Tables & Structured Data
+
+**→ Tabular data extracted from the page.**
+
+**⚠️ If task involves data analysis, this data may be here!**
+
+
+*No tables found*
+
+
+## 🔍 SECTION 6: Raw HTML Source Code
+
+**→ Complete HTML including JavaScript, hidden data, and encoded values.**
+
+
+**⚠️ CRITICAL CHECKS:**
+
+- Look for `<script>` tags with JavaScript variables (var data = ..., const info = ...)
+
+- Search for `<input type="hidden">` elements with encoded data
+
+- Check for Base64 strings (if you see atob() or btoa() functions)
+
+- Look for JSON data embedded in JavaScript (JSON.parse(...))
+
+- Find submission endpoints in <form> action attributes or fetch() calls
+
+
+**🔍 Detected in HTML:** JavaScript, Base64 encoding/decoding
+
+
+```html
+
+<html><head></head><body><div id="question">Scrape <a href="/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in">/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in</a> (relative to this page).
+Get the secret code from this page.
+POST the secret code back to <a href="/submit">/submit</a>
+
+<pre>{
+  "email": "23f2003481@ds.study.iitm.ac.in",
+  "secret": "your secret",
+  "url": "this page's URL",
+  "answer": "the secret code you scraped"
+}
+</pre></div>
+
+<script>
+const urlParams = new URLSearchParams(location.search.replace(/^\?/, ""));
+const email = urlParams.get("email");
+const code = `U2NyYXBlIDxhIGhyZWY9Ii9kZW1vLXNjcmFwZS1kYXRhP2VtYWlsPSRFTUFJTCI+L2RlbW8tc2NyYXBlLWRhdGE/ZW1haWw9JEVNQUlMPC9hPiAocmVsYXRpdmUgdG8gdGhpcyBwYWdlKS4KR2V0IHRoZSBzZWNyZXQgY29kZSBmcm9tIHRoaXMgcGFnZS4KUE9TVCB0aGUgc2VjcmV0IGNvZGUgYmFjayB0byA8YSBocmVmPSIvc3VibWl0Ij4vc3VibWl0PC9hPgoKPHByZT4KewogICJlbWFpbCI6ICIkRU1BSUwiLAogICJzZWNyZXQiOiAieW91ciBzZWNyZXQiLAogICJ1cmwiOiAidGhpcyBwYWdlJ3MgVVJMIiwKICAiYW5zd2VyIjogInRoZSBzZWNyZXQgY29kZSB5b3Ugc2NyYXBlZCIKfQo8L3ByZT4=`;
+const content = email
+  ? atob(code).replace(/\$EMAIL/g, email)
+  : "Please provide ?email=";
+document.querySelector("#question").innerHTML = content;
+</script>
+</body></html>
+
+```
+
+
+================================================================================
+
+📌 **End of Report** - All webpage content has been extracted and organized above.

@@ -1,46 +1,55 @@
+import asyncio
 import requests
-import pandas as pd
 import json
+import os
+from LLMFunc import LLMScraperHandler
 
-# Define the URL for the CSV file
-csv_url = "https://tds-llm-analysis.s-anand.net/demo-audio-data.csv"
+# AI-Powered Scraping Function
+async def ai_scrape_and_extract(url_to_scrape: str, extraction_instructions: str):
+    print(f"🤖 AI-Powered Scraping: {url_to_scrape}")
+    print(f"📝 Task: {extraction_instructions}")
+    
+    # Step 1: Scrape the URL
+    handler = LLMScraperHandler()
+    result = await handler.handle_request({"url": url_to_scrape, "force_dynamic": True})
+    
+    if not result.get('success'):
+        print(f"❌ Scraping failed: {result.get('error')}")
+        return None
+    
+    # Step 2: Format as markdown for AI processing
+    markdown_content = handler.format_as_markdown(result)
+    
+    # Step 3: Call AI to extract data
+    api_key = os.getenv("AI_PIPE_TOKEN_1")
+    ai_prompt = f'''You are a data extraction expert. Extract the requested data from the webpage content below.
 
-# Define headers for the request
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-}
+EXTRACTION TASK: {extraction_instructions}
 
-# Read the CSV file into a pandas DataFrame
-df = pd.read_csv(csv_url)
+WEBPAGE CONTENT:
+{markdown_content}
 
-# Extract the cutoff value from the markdown report
-cutoff_value = 24111
-
-# Filter the DataFrame based on the cutoff value
-filtered_df = df[df['value'] > cutoff_value]
-
-# Process the filtered data to compute the required answer
-# For example, let's assume we need to sum a column named 'amount'
-total_amount = filtered_df['amount'].sum()
-
-# Prepare the answer in the required JSON format
-answer = {
-    "email": "your email",
-    "secret": "your secret",
-    "url": "https://tds-llm-analysis.s-anand.net/demo-audio",
-    "answer": total_amount
-}
-
-# Print the answer for verification
-print("Answer:", json.dumps(answer, indent=2))
-
-# Define the submission endpoint URL
-submission_url = "https://tds-llm-analysis.s-anand.net/submit"
-
-# Submit the answer to the endpoint
-response = requests.post(submission_url, json=answer, headers=headers)
-response.raise_for_status()
-
-# Print the submission response
-print("Submission response:", json.dumps(response.json()))
-print("Status code:", response.status_code)
+Return ONLY a valid JSON object with the extracted data. No explanations, just the JSON.
+'''
+    
+    ai_url = "https://aipipe.org/openai/v1/chat/completions"
+    ai_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    ai_payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": "You are a data extraction expert. Return only valid JSON."},
+            {"role": "user", "content": ai_prompt}
+        ],
+        "temperature": 0.3
+    }
+    
+    try:
+        ai_response = requests.post(ai_url, headers=ai_headers, json=ai_payload, timeout=60)
+        ai_result = ai_response.json()
+        extracted_text = ai_result['choices'][0]['message']['content']
+        
+        # Try to parse as JSON
+        if '
