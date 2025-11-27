@@ -8,6 +8,17 @@ from dotenv import load_dotenv
 from fastapi.responses import HTMLResponse
 import requests
 
+# Import LangChain Agent (with fallback to simple agent)
+try:
+    from langchain_agent import create_quiz_agent
+    LANGCHAIN_AVAILABLE = True
+    print("✅ LangChain agent loaded")
+except ImportError as e:
+    print(f"⚠️ LangChain not available: {e}")
+    print("📦 Falling back to simple agent")
+    from agent import AIAgent
+    LANGCHAIN_AVAILABLE = False
+
 app = FastAPI()
 load_dotenv()
 
@@ -16,64 +27,10 @@ api_key = os.getenv("AI_PIPE_TOKEN_1")
 EXPECTED_SECRET = os.getenv("SECRET_KEY", "23SHWEBGPT")
 STUDENT_EMAIL = os.getenv("STUDENT_EMAIL", "23f2004891@ds.study.iitm.ac.in")
 
+if not api_key:
+    print("❌ WARNING: AI_PIPE_TOKEN_1 not found in environment!")
 
-class AIPipeClient:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.base_url = "https://aipipe.org/openai/v1"
-
-    class Chat:
-        def __init__(self, parent):
-            self.parent = parent
-
-        class Completions:
-            def __init__(self, parent):
-                self.parent = parent
-
-            def create(self, model, messages, temperature=0.7):
-                url = f"{self.parent.parent.base_url}/chat/completions"
-                headers = {
-                    "Authorization": f"Bearer {self.parent.parent.api_key}",
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature
-                }
-                resp = requests.post(url, headers=headers, json=payload)
-                resp_json = resp.json()
-                
-                # Debug: Print raw response
-                print("Raw API Response:", json.dumps(resp_json, indent=2))
-                
-                # Return object with proper structure
-                class Response:
-                    def __init__(self, data):
-                        self.raw_data = data
-                        self.model = data.get("model", "")
-                        self.choices = [Choice(c) for c in data.get("choices", [])]
-                
-                class Choice:
-                    def __init__(self, data):
-                        self.message = Message(data.get("message", {}))
-                
-                class Message:
-                    def __init__(self, data):
-                        self.content = data.get("content", "")
-                
-                return Response(resp_json)
-
-        @property
-        def completions(self):
-            return self.Completions(self)
-
-    @property
-    def chat(self):
-        return self.Chat(self)
-
-client = AIPipeClient(api_key)
-
+# Agent will be created per request, not globally
 
 ###################################################
 
@@ -202,6 +159,21 @@ async def process_quiz_url(url: str, email: str, request_body: dict = None, forc
     if request_body:
         additional_context = f"\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📨 REQUEST BODY DATA:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{json.dumps(request_body, indent=2)}\n\n⚠️ IMPORTANT: Use this request body data (email, secret, etc.) if the task requires it.\n"
     
+    # Create agent instance for this request
+    try:
+        if LANGCHAIN_AVAILABLE:
+            print("🤖 Initializing LangChain Agent...")
+            agent = create_quiz_agent(api_key)
+        else:
+            print("🤖 Initializing Simple Agent...")
+            agent = AIAgent(api_key)
+    except Exception as e:
+        print(f"❌ Failed to initialize agent: {e}")
+        return {
+            "success": False,
+            "error": f"Agent initialization failed: {str(e)}"
+        }
+    
     # Retry loop for incorrect answers
     retry_attempt = 0
     previous_errors = []
@@ -209,35 +181,39 @@ async def process_quiz_url(url: str, email: str, request_body: dict = None, forc
     while retry_attempt <= max_retries:
         if retry_attempt > 0:
             print(f"\n🔄 Retry attempt {retry_attempt}/{max_retries}")
+            # Reset agent for fresh attempt
+            try:
+                agent.reset()
+            except:
+                pass  # Simple agent might not have reset method
         
-        # Update prompt to use question.md content + request body + previous errors
-        error_context = ""
+        # Prepare full context for the agent
+        full_context = f"""
+QUIZ PAGE CONTENT:
+{question_md_content}
+
+{additional_context}
+"""
+        
         if previous_errors:
-            error_context = f"\n\n⚠️ PREVIOUS ATTEMPTS FAILED:\n"
+            full_context += f"\n\n⚠️ PREVIOUS ATTEMPTS FAILED:\n"
             for i, error in enumerate(previous_errors, 1):
-                error_context += f"\nAttempt {i}: {error}\n"
-            error_context += "\n🔧 ANALYZE THE ERROR AND TRY A DIFFERENT APPROACH!\n"
-        
-        # Use replace instead of format to avoid issues with {{ }} in examples
-        prompt_final = prompt.replace("{content}", question_md_content + additional_context + error_context)
+                full_context += f"\nAttempt {i}: {error}\n"
+            full_context += "\n🔧 ANALYZE THE ERROR AND TRY A DIFFERENT APPROACH!\n"
         
         try:
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": prompt_final},
-                    {"role": "user", "content": "Generate the complete Python script to solve this quiz."}
-                ],
-                temperature=0.4 + (retry_attempt * 0.1)  # Increase temperature on retries
-            )
-        
-            if not hasattr(resp, 'choices') or len(resp.choices) == 0:
+            # Use agent to solve the quiz
+            print(f"\n🤖 Invoking Agent to analyze and solve quiz...")
+            if LANGCHAIN_AVAILABLE:
+                message_text = agent.solve_quiz(full_context, max_attempts=1)
+            else:
+                message_text = agent.solve_task(full_context, max_iterations=1)
+            
+            if not message_text:
                 return {
                     "success": False,
-                    "error": "No response from LLM"
+                    "error": "No response from LangChain Agent"
                 }
-            
-            message_text = resp.choices[0].message.content
             
             # Extract Python code from the response
             python_code = None
@@ -527,305 +503,960 @@ async def process_quiz_url(url: str, email: str, request_body: dict = None, forc
                 "traceback": traceback.format_exc()
             }
 
-prompt="""You are a quiz-solving expert. The webpage content below is fully extracted and organized for you.
+prompt=r"""You are a quiz-solving expert who performs data extraction EXPLICITLY before writing code.
 
-📋 CONTENT SECTIONS:
-- SECTION 1 (Text Content): Task instructions, visible data, submission URLs
-- SECTION 2 (Links): CSV/JSON/PDF files, APIs, external pages to scrape
-- SECTION 3 (Tables): Pre-extracted tabular data
-- SECTION 6 (Raw HTML): JS variables, hidden inputs, Base64, form actions
-- URL Parameters & Request Body: Email, ID, secrets
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚫 CRITICAL: DO NOT USE CUSTOM MODULES IN GENERATED CODE!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🎯 QUICK STRATEGY:
+Your generated Python script will run in a CLEAN environment.
+You can ONLY use standard libraries + requests + BeautifulSoup + pandas.
+
+❌ FORBIDDEN: from LLMFunc import anything
+❌ FORBIDDEN: LLMScraperHandler, custom scrapers
+✅ ALLOWED: requests, BeautifulSoup, pandas, json, re, base64
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 YOUR WORKFLOW (MANDATORY):
+
+STEP 1: 🔍 ANALYZE & EXTRACT THE DATA (Write this out!)
+STEP 2: 📊 SHOW THE EXTRACTED DATA (Display what you found)
+STEP 3: 💻 GENERATE PYTHON CODE (Only after extraction is complete)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 STEP 1: READ SECTION 1 FIRST - UNDERSTAND THE ACTUAL TASK
+
+⚠️ **CRITICAL**: ALWAYS start by reading "📝 SECTION 1: Page Text Content" below!
+
+**SECTION 1 contains the ACTUAL QUIZ INSTRUCTIONS in plain text.**
+This is what the quiz is asking you to do. Everything else is just supporting data.
+
+📖 **How to read SECTION 1:**
+
+1. **Read the entire text in SECTION 1 carefully** - this is the actual question/task
+2. **Identify key action words:** "scrape", "download", "calculate", "find", "decode", "extract"
+3. **Note any URLs mentioned** - these might be relative URLs like "/data-page"
+4. **Look for submission format** - often shown as JSON example: {{"key": "value"}}
+5. **Understand what data is needed** - secret code? number? list? JSON object?
+
+⚠️ **IMPORTANT LOGIC:**
+
+- If SECTION 1 says "scrape [URL]" → You MUST scrape that URL (not look in SECTION 6!)
+- If SECTION 1 says "decode the message" → Then check SECTION 6 for encoded data
+- If SECTION 1 says "download [file]" → Check SECTION 2 for the file link
+- If SECTION 1 says "calculate from table" → Check SECTION 3 for table data
+- If SECTION 1 is just displaying text → The answer might BE that text
+
+**Content Organization:**
+- **SECTION 1 (Text Content)**: 🎯 THE ACTUAL QUESTION - READ THIS FIRST!
+- **SECTION 2 (Links)**: URLs mentioned in the task (convert relative URLs to absolute!)
+- **SECTION 3 (Tables)**: Pre-extracted tabular data
+- **SECTION 6 (Raw HTML)**: Only check if SECTION 1 mentions "hidden data" or "decode"
+
+**YOUR MANDATORY ANALYSIS FORMAT:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 TASK ANALYSIS (Based on SECTION 1):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP A: READ SECTION 1 COMPLETELY
+[Copy the entire text from "📝 SECTION 1: Page Text Content" here]
+
+Full text from SECTION 1:
+"[paste the actual text]"
+
+STEP B: INTERPRET THE TASK
+What is it asking me to do?
+- [ ] Scrape an external URL? Which URL? [identify from SECTION 1 text]
+- [ ] Download a file? Which file? [look for .csv, .json, .txt mentioned]
+- [ ] Decode/decrypt something? What data? [then check SECTION 6]
+- [ ] Calculate from data? What calculation? [then check SECTION 3 or scrape]
+- [ ] Simply read visible text? What text? [might already be in SECTION 1]
+
+STEP C: IDENTIFY DATA SOURCE
+Based on what SECTION 1 is asking:
+
+Primary source: [Where will I get the data?]
+- If SECTION 1 says "scrape /some-url" → 
+  ✓ Need to scrape: https://[base-domain]/some-url (check SECTION 2 for full URL)
+- If SECTION 1 says "the secret is hidden" → 
+  ✓ Check SECTION 6 for Base64, JS variables, hidden inputs
+- If SECTION 1 says "analyze the table" → 
+  ✓ Check SECTION 3 for table data
+- If SECTION 1 shows the data directly → 
+  ✓ The answer might be visible in SECTION 1 itself!
+
+STEP D: SCRAPING STRATEGY
+Do I need to scrape? [YES/NO - based on SECTION 1's instruction]
+
+If YES:
+- Target URL (from SECTION 2 or mentioned in SECTION 1): [full URL]
+- URL is relative? Convert to absolute: https://[domain][path]
+- What to extract from that URL: [specific element, pattern, or data]
+- Tools: requests.get() + BeautifulSoup
+
+If NO:
+- Data location: [SECTION 3 tables / SECTION 6 hidden / SECTION 1 visible]
+- Extraction method: [pandas / regex / base64.decode / direct copy]
+
+STEP E: EXPECTED OUTPUT FORMAT
+Based on SECTION 1, what format should the answer be?
+[Look for JSON examples in SECTION 1 - copy the structure]
+
+Example from SECTION 1:
+{{"email": "...", "answer": "..."}}  ← Use this exact structure!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**NOW PERFORM THE ACTUAL EXTRACTION:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔎 EXTRACTION PROCESS (Follow what SECTION 1 asks!):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EXECUTION BASED ON SECTION 1 INSTRUCTION:
+
+[SCENARIO A: If SECTION 1 says "Scrape [URL]" or "Visit [URL]"]
+
+Step 1: Identified target URL from SECTION 1
+   - Mentioned URL: /demo-scrape-data?email=...
+   - From SECTION 2, full URL: https://example.com/demo-scrape-data?email=...
+   - Note: Relative URLs must be converted to absolute!
+
+Step 2: Scraping the target URL
+   - Executing: requests.get("https://example.com/demo-scrape-data?email=...")
+   - Status: 200 OK
+   - Response received
+
+Step 3: Parsing response
+   - Content type: [HTML / JSON / Text]
+   - Using: BeautifulSoup if HTML, json.loads() if JSON
+   - Looking for: [what SECTION 1 asked - "secret code", "data", etc.]
+
+Step 4: Extracting requested data
+   - Found element: <div id="secret">ABC123</div>
+   - Extracted value: "ABC123"
+   - This is what SECTION 1 asked for!
+
+[SCENARIO B: If SECTION 1 says "Decode" or mentions "hidden"]
+
+Step 1: Checking SECTION 6 as directed by SECTION 1
+   - Looking for: Base64 patterns, JS variables with encoded data
+   - Found: const code = "SGVsbG8..."
+   
+Step 2: Decoding
+   - Method: base64.b64decode()
+   - Result: "Hello World"
+
+[SCENARIO C: If SECTION 1 says "Calculate" or "Analyze table"]
+
+Step 1: Checking SECTION 3 for table data
+   - Table found: Yes/No
+   - Columns: [list columns]
+   
+Step 2: Processing
+   - Calculation: sum/mean/count as requested in SECTION 1
+   - Result: 1500
+
+[SCENARIO D: If SECTION 1 displays the answer directly]
+
+Step 1: Reading SECTION 1 text
+   - The text in SECTION 1 IS the answer!
+   - Answer: [copy from SECTION 1]
+
+✅ FINAL EXTRACTED DATA (answers what SECTION 1 asked):
+{{"key": "value"}}  ← This matches what SECTION 1 requested
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 STEP 2: VALIDATE YOUR EXTRACTION
+
+**Confirm the data matches the question requirements:**
+
+```
+✅ VALIDATION CHECKLIST:
+☐ Does this data answer the question from SECTION 1?
+☐ Is the format correct (JSON object, number, string, list)?
+☐ Did I scrape the correct URL if external scraping was needed?
+☐ Is the data complete and accurate?
+
+FINAL ANSWER TO SUBMIT:
+{{"key": "value"}}  ← [Show the exact JSON that will be submitted]
+```
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💻 STEP 3: GENERATE PYTHON CODE
+
+**NOW write the Python script that:**
+1. Performs the scraping/extraction you analyzed above
+2. Processes the data
+3. Formats as JSON
+4. Submits to the endpoint
+
+⚠️ **IF SCRAPING EXTERNAL URL IS REQUIRED:**
+Your code MUST include requests.get() to scrape the target URL!
+
+Example structure when scraping is needed:
+```python
+import requests
+from bs4 import BeautifulSoup
+
+# Scrape the external URL (identified in analysis)
+target_url = "https://example.com/data"
+response = requests.get(target_url, headers={{"User-Agent": "Mozilla/5.0"}})
+soup = BeautifulSoup(response.text, 'html.parser')
+
+# Extract the data (as identified in extraction process)
+data = soup.find('div', {{'id': 'secret'}}).get_text().strip()
+
+# Submit
+answer = {{"secret": data}}
+# ... submission code
+```
+
+Only NOW, after extraction, write the Python code that:
+1. Uses the extracted data (hardcode it if already known!)
+2. Performs any required computation
+3. Formats as JSON
+4. Submits to the endpoint
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 QUICK STRATEGY FOR DATA LOCATION:
 1. Read SECTION 1 → Understand the task
 2. Find data source:
    - Visible answer? → SECTION 1 (Text Content)
-   - Hidden data? → SECTION 6 (Raw HTML - JS vars, hidden inputs)
+   - Hidden data? → SECTION 6 (Raw HTML - JS vars, hidden inputs, Base64)
    - External file/URL? → SECTION 2 (Links)
    - Table data? → SECTION 3 (Tables)
-3. Extract/compute → Format as exact JSON → Submit with print statements
+3. Extract EXPLICITLY (write it out!) → Format as JSON → Generate code
 
 ⚡ DATA EXTRACTION METHODS:
 
-**Method 1: Current Page Data (No external fetch)**
+**Method 1: Extract from Current Page (FASTEST - No external fetch needed)**
 ```python
 from bs4 import BeautifulSoup
-import re, json
+import re, json, base64
 
-# For visible text: Check SECTION 1 (Text Content) directly
-# For hidden data: Parse SECTION 6 (Raw HTML)
-html = "..."  # From SECTION 6
+# ALWAYS check SECTION 1 (Text Content) first - answer might be visible!
+# THEN check SECTION 6 (Raw HTML) for hidden data
+
+html = "..."  # Copy from SECTION 6: Raw HTML Source Code
 soup = BeautifulSoup(html, 'html.parser')
 
-# Extract JS variables
-scripts = soup.find_all('script')
-for script in scripts:
-    if script.string and 'var ' in script.string:
-        match = re.search(r'var\s+(\w+)\s*=\s*(\{{.*?\}}|".*?"|[\d.]+)', script.string)
+# Pattern A: Base64 Encoded Data (COMMON!)
+# Look for: long alphanumeric strings, often in <pre>, <code>, or script tags
+base64_patterns = re.findall(r'[A-Za-z0-9+/]{{40,}}={{{0,2}}}', html)
+for encoded in base64_patterns:
+    try:
+        decoded = base64.b64decode(encoded).decode('utf-8')
+        print(f"Base64 decoded: {{decoded[:100]}}")
+        # Check if decoded text contains JSON or answer
+        if '{{' in decoded:
+            data = json.loads(decoded)
+    except: pass
 
-# Extract hidden inputs
-hidden = soup.find_all('input', type='hidden')
+# Pattern B: JavaScript Variables (var/const/let)
+script_tags = soup.find_all('script')
+for script in script_tags:
+    if script.string:
+        # Extract JSON objects
+        json_matches = re.findall(r'(?:var|const|let)\s+\w+\s*=\s*(\{[^;]+\});?', script.string, re.DOTALL)
+        for match in json_matches:
+            try:
+                data = json.loads(match)
+                print(f"Found JS data: {{data}}")
+            except: pass
+        
+        # Extract simple values
+        var_matches = re.findall(r'(?:var|const|let)\s+(\w+)\s*=\s*["\']([^"\']+)["\']', script.string)
+        for var_name, var_value in var_matches:
+            print(f"{{var_name}} = {{var_value}}")
+
+# Pattern C: Hidden Form Inputs
+hidden_inputs = soup.find_all('input', type='hidden')
+for inp in hidden_inputs:
+    print(f"Hidden: {{inp.get('name')}} = {{inp.get('value')}}")
+
+# Pattern D: Data Attributes (data-*, id, value)
+for elem in soup.find_all(attrs={{"data-secret": True}}):
+    print(f"Data attr: {{elem.get('data-secret')}}")
+
+# Pattern E: JSON in <script type="application/json">
+json_scripts = soup.find_all('script', type='application/json')
+for script in json_scripts:
+    data = json.loads(script.string)
+    print(f"JSON script: {{data}}")
 ```
 
-**Method 2: Simple Downloads (CSV/JSON/API)**
+**Method 2: Simple Direct Downloads (CSV/JSON/API endpoints)**
 ```python
 import requests, pandas as pd
 from io import StringIO
 
-# JSON API
-data = requests.get(url, headers={{"User-Agent": "Mozilla/5.0"}}).json()
+# For JSON APIs (check SECTION 2: Links for .json URLs)
+response = requests.get("url.json", headers={{"User-Agent": "Mozilla/5.0"}})
+data = response.json()
 
-# CSV file
-df = pd.read_csv(StringIO(requests.get(url).text))
+# For CSV files (check SECTION 2: Links for .csv URLs)
+csv_response = requests.get("url.csv", headers={{"User-Agent": "Mozilla/5.0"}})
+df = pd.read_csv(StringIO(csv_response.text))
+result = df.to_dict('records')  # or df.sum(), df.mean(), etc.
+
+# For plain text/data files
+text_response = requests.get("url.txt", headers={{"User-Agent": "Mozilla/5.0"}})
+text_data = text_response.text
 ```
 
-**Method 3: Complex Scraping (ONLY when task explicitly says "scrape")**
-```python
-import asyncio, requests, json, os
-from LLMFunc import LLMScraperHandler
+**Method 3: Scrape External Pages (Use standard scraping - NO LLMScraperHandler!)**
 
-async def ai_scrape(url, task):
-    handler = LLMScraperHandler()
-    result = await handler.handle_request({{"url": url, "force_dynamic": True}})
-    if not result.get('success'): return None
-    
-    # Option A: Use pre-extracted data (FASTEST)
-    data = result['data']
-    text = data.get('text_content', '')
-    links = data.get('links', [])
-    tables = data.get('tables', [])
-    return {{"text": text, "links": links, "tables": tables}}
-    
-    # Option B: AI extraction (ONLY for complex parsing)
-    # Use ONLY when simple parsing fails
-    markdown = handler.format_as_markdown(result)
-    ai_key = os.getenv("AI_PIPE_TOKEN_1")
-    resp = requests.post("https://aipipe.org/openai/v1/chat/completions",
-        headers={{"Authorization": f"Bearer {{ai_key}}", "Content-Type": "application/json"}},
-        json={{"model": "gpt-4o-mini", "messages": [
-            {{"role": "system", "content": "Extract data as JSON only"}},
-            {{"role": "user", "content": f"Extract: {{task}}\\n\\nContent:\\n{{markdown}}"}}
-        ], "temperature": 0.3}})
-    return json.loads(resp.json()['choices'][0]['message']['content'])
-
-# Use: data = asyncio.run(ai_scrape("https://url.com", "get table rows"))
-```
-
-⚠️ CRITICAL RULES:
-- Try simple extraction FIRST (Method 1 or 2)
-- Use AI scraping (Method 3 Option B) ONLY when:
-  * Task explicitly says "scrape complex data"
-  * Simple parsing fails
-  * Data structure is too complex
-- For most tasks: Direct extraction from sections is enough!
-
-🔧 SCRAPING TOOLS - USE WHEN TASK ASKS TO SCRAPE:
-
-**⚡ SMART SCRAPING WITH AI ASSISTANT (RECOMMENDED):**
-
-When the task requires scraping external URLs, use the AI-powered scraping assistant that will:
-1. Scrape the external URL
-2. Extract and analyze the data intelligently
-3. Return the processed results to you
+⚠️ CRITICAL: DO NOT use LLMScraperHandler or any custom scrapers!
+Use standard Python libraries: requests, BeautifulSoup, selenium (if needed)
 
 ```python
-import asyncio
 import requests
+from bs4 import BeautifulSoup
+import re
 import json
-import os
-from LLMFunc import LLMScraperHandler
 
-# AI-Powered Scraping Function (Use this when you need to scrape external URLs)
-async def ai_scrape_and_extract(url_to_scrape: str, extraction_instructions: str):
-    "
-    Scrape a URL and use AI to extract specific data based on instructions.
+def scrape_url(url: str):
+    # Scrape any external URL using standard requests + BeautifulSoup.
+    # DO NOT use LLMScraperHandler - it's not available in the generated script!
+    print(f"🌐 Scraping: {{url}}")
     
-    Args:
-        url_to_scrape: The URL to scrape
-        extraction_instructions: What you want to extract (e.g., "Extract all product prices", "Get the table data")
-    
-    Returns:
-        Extracted data as a dictionary or list
-    "
-    print(f"🤖 AI-Powered Scraping: {{url_to_scrape}}")
-    print(f"📝 Task: {{extraction_instructions}}")
-    
-    # Step 1: Scrape the URL
-    handler = LLMScraperHandler()
-    result = await handler.handle_request({{"url": url_to_scrape, "force_dynamic": True}})
-    
-    if not result.get('success'):
-        print(f"❌ Scraping failed: {{result.get('error')}}")
-        return None
-    
-    # Step 2: Format as markdown for AI processing
-    markdown_content = handler.format_as_markdown(result)
-    
-    # Step 3: Call AI to extract data
-    api_key = os.getenv("AI_PIPE_TOKEN_1")
-    ai_prompt = f'''You are a data extraction expert. Extract the requested data from the webpage content below.
-
-EXTRACTION TASK: {{extraction_instructions}}
-
-WEBPAGE CONTENT:
-{{markdown_content}}
-
-Return ONLY a valid JSON object with the extracted data. No explanations, just the JSON.
-'''
-    
-    ai_url = "https://aipipe.org/openai/v1/chat/completions"
-    ai_headers = {{
-        "Authorization": f"Bearer {{api_key}}",
-        "Content-Type": "application/json"
-    }}
-    ai_payload = {{
-        "model": "gpt-4o-mini",
-        "messages": [
-            {{"role": "system", "content": "You are a data extraction expert. Return only valid JSON."}},
-            {{"role": "user", "content": ai_prompt}}
-        ],
-        "temperature": 0.3
+    headers = {{
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }}
     
     try:
-        ai_response = requests.post(ai_url, headers=ai_headers, json=ai_payload, timeout=60)
-        ai_result = ai_response.json()
-        extracted_text = ai_result['choices'][0]['message']['content']
-        
-        # Try to parse as JSON
-        if '```json' in extracted_text:
-            json_start = extracted_text.find('```json') + 7
-            json_end = extracted_text.find('```', json_start)
-            extracted_text = extracted_text[json_start:json_end].strip()
-        elif '```' in extracted_text:
-            json_start = extracted_text.find('```') + 3
-            json_end = extracted_text.find('```', json_start)
-            extracted_text = extracted_text[json_start:json_end].strip()
-        
-        extracted_data = json.loads(extracted_text)
-        print(f"✅ AI Extraction Complete!")
-        return extracted_data
-        
-    except Exception as e:
-        print(f"⚠️ AI extraction failed, returning raw text content")
-        # Fallback: return the text content directly
-        return result.get('data', {{}}).get('text_content', '')
-
-# EXAMPLE USAGE:
-# If task says "Scrape https://example.com/products and get all prices"
-prices_data = asyncio.run(ai_scrape_and_extract(
-    url_to_scrape="https://example.com/products",z
-    extraction_instructions="Extract all product prices as a list of numbers"
-))
-
-# If task says "Scrape the data page and get the table"
-table_data = asyncio.run(ai_scrape_and_extract(
-    url_to_scrape="https://example.com/data",
-    extraction_instructions="Extract the data table as a list of dictionaries with column names as keys"
-))
-```
-
-**Method 2: Manual Scraping (if you need full control):**
-```python
-import asyncio
-from LLMFunc import LLMScraperHandler
-from bs4 import BeautifulSoup
-
-async def scrape_external_page(url):
-    print(f"🌐 Scraping external URL: {{url}}")
-    handler = LLMScraperHandler()
-    result = await handler.handle_request({{"url": url, "force_dynamic": True}})
-    
-    if result.get('success'):
-        data = result.get('data', {{}})
-        text_content = data.get('text_content', '')
-        html_content = data.get('raw_html', '')
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        html_content = response.text
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        return {{"text": text_content, "html": html_content, "soup": soup, "data": data}}
-    else:
-        print(f"❌ Scraping failed: {{result.get('error')}}")
+        print(f"✅ Successfully scraped {{url}}")
+        return {{"html": html_content, "soup": soup, "text": soup.get_text()}}
+        
+    except Exception as e:
+        print(f"❌ Scraping failed: {{e}}")
         return None
 
-# Use it:
-scraped_data = asyncio.run(scrape_external_page("https://example.com/data"))
-if scraped_data:
-    text = scraped_data['text']
-    soup = scraped_data['soup']
-    # ... manual parsing
+# EXAMPLE 1: Scrape and extract data
+scraped = scrape_url("https://example.com/data")
+if scraped:
+    soup = scraped['soup']
+    
+    # Extract specific elements
+    secret_code = soup.find('div', {{'id': 'secret'}})
+    if secret_code:
+        code = secret_code.get_text().strip()
+        print(f"Found code: {{code}}")
+    
+    # Extract from table
+    table = soup.find('table')
+    if table:
+        rows = table.find_all('tr')
+        data = []
+        for row in rows[1:]:  # Skip header
+            cols = [col.get_text().strip() for col in row.find_all('td')]
+            data.append(cols)
+        print(f"Table data: {{data}}")
+    
+    # Extract Base64 from scraped page
+    base64_pattern = re.findall(r'[A-Za-z0-9+/]{{40,}}={{{0,2}}}', scraped['html'])
+    if base64_pattern:
+        import base64
+        decoded = base64.b64decode(base64_pattern[0]).decode('utf-8')
+        print(f"Decoded: {{decoded}}")
+
+# EXAMPLE 2: Scrape JSON/API endpoint
+api_response = requests.get("https://example.com/api/data", headers=headers)
+data = api_response.json()
+print(f"API data: {{data}}")
+
+# EXAMPLE 3: Download and parse CSV
+import pandas as pd
+from io import StringIO
+
+csv_response = requests.get("https://example.com/data.csv", headers=headers)
+df = pd.read_csv(StringIO(csv_response.text))
+result = df.to_dict('records')
+print(f"CSV data: {{result}}")
 ```
 
-**Method 3: Download API/JSON/CSV Data (Direct):**
+**For JavaScript-heavy pages (if simple scraping fails):**
+```python
+# Option 1: Try to extract data from script tags
+scripts = soup.find_all('script')
+for script in scripts:
+    if script.string and 'data' in script.string:
+        # Look for JSON data in JavaScript
+        json_match = re.search(r'var data = (\{{.*?\}});', script.string, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group(1))
+            print(f"Found JS data: {{data}}")
+
+# Option 2: Use selenium for dynamic content (only if absolutely necessary)
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+chrome_options = Options()
+chrome_options.add_argument('--headless')
+chrome_options.add_argument('--no-sandbox')
+chrome_options.add_argument('--disable-dev-shm-usage')
+
+driver = webdriver.Chrome(options=chrome_options)
+driver.get("https://example.com")
+page_source = driver.page_source
+driver.quit()
+
+soup = BeautifulSoup(page_source, 'html.parser')
+# ... extract data from soup
+```
+
+⚠️ CRITICAL DECISION TREE:
+1. **Check SECTION 1 (Text Content)** → Answer visible? DONE!
+2. **Check SECTION 6 (Raw HTML)** → Look for Base64, JS vars, hidden inputs → DONE!
+3. **Check SECTION 2 (Links)** → CSV/JSON file? Download directly → DONE!
+4. **Task says "scrape another page"?** → Use Method 3 (AI scraping)
+5. **Still stuck?** → Re-read SECTION 1, the answer is probably there!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 COMPLETE EXAMPLES - FOLLOW THESE PATTERNS:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLE 1: SCRAPING WITH RELATIVE URL (Most Common!)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**SECTION 1 shows:**
+```
+Scrape /demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in (relative to this page).
+Get the secret code from this page.
+POST the secret code back to /submit
+{{
+  "email": "23f2003481@ds.study.iitm.ac.in",
+  "secret": "your secret",
+  "answer": "the secret code you scraped"
+}}
+```
+
+**SECTION 2 shows:** 
+- Link: /demo-scrape-data?email=... → https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=...
+- Submit endpoint: /submit → https://tds-llm-analysis.s-anand.net/submit
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 TASK ANALYSIS (Based on SECTION 1):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP A: READ SECTION 1 COMPLETELY
+Full text from SECTION 1:
+"Scrape /demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in (relative to this page).
+Get the secret code from this page.
+POST the secret code back to /submit
+{{
+  "email": "23f2003481@ds.study.iitm.ac.in",
+  "secret": "your secret",
+  "answer": "the secret code you scraped"
+}}"
+
+STEP B: INTERPRET THE TASK
+What is it asking?
+- ✓ "Scrape /demo-scrape-data..." → I need to SCRAPE a URL!
+- ✓ "Get the secret code" → Find a secret code on that scraped page
+- ✓ "POST... to /submit" → Submit endpoint is /submit
+
+STEP C: IDENTIFY DATA SOURCE
+- SECTION 1 says: "Scrape /demo-scrape-data?email=..."
+- This is a RELATIVE URL! Need to convert to absolute.
+- From URL Parameters: Base domain is https://tds-llm-analysis.s-anand.net
+- From SECTION 2: Full URL is https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=...
+
+STEP D: SCRAPING STRATEGY
+Scraping required: YES!
+- Target URL: https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in
+- What to find: "secret code" (look for text/element containing this)
+- Tools: requests.get() + BeautifulSoup
+
+STEP E: EXPECTED OUTPUT FORMAT
+From SECTION 1, the JSON structure:
+{{
+  "email": "23f2003481@ds.study.iitm.ac.in",
+  "secret": "your secret",
+  "answer": "the secret code you scraped"
+}}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔎 EXTRACTION PROCESS (Following SECTION 1 instruction):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1: Scraping the URL mentioned in SECTION 1
+   - Target: https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in
+   - Using: requests.get() with User-Agent
+   - Status: 200 OK
+
+Step 2: Parsing HTML response
+   - Using: BeautifulSoup(html, 'html.parser')
+   - Looking for: "secret code" in text or specific element
+   - Found: <div id="secret-code">ABC123XYZ</div>
+
+Step 3: Extracting the secret code
+   - Raw data: "ABC123XYZ"
+   - This is what SECTION 1 asked for!
+
+✅ FINAL EXTRACTED DATA:
+{{
+  "email": "23f2003481@ds.study.iitm.ac.in",
+  "secret": "your secret",  # from URL params if needed
+  "answer": "ABC123XYZ"  # the scraped secret code
+}}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Python code (implements what SECTION 1 asked):**
+
+```python
+import requests
+from bs4 import BeautifulSoup
+import json
+
+# Step 1: Scrape the URL specified in SECTION 1
+# SECTION 1 said: "Scrape /demo-scrape-data?email=..."
+# SECTION 2 gives full URL: https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=...
+scrape_url = "https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in"
+
+print(f"🌐 Scraping as instructed by SECTION 1: {{scrape_url}}")
+response = requests.get(scrape_url, headers={{"User-Agent": "Mozilla/5.0"}})
+print(f"✅ Response status: {{response.status_code}}")
+
+# Step 2: Parse and extract secret code (as SECTION 1 asked for)
+soup = BeautifulSoup(response.text, 'html.parser')
+
+# Look for secret code - try multiple patterns
+secret_code = None
+
+# Try finding by id/class
+if soup.find(id="secret-code"):
+    secret_code = soup.find(id="secret-code").get_text().strip()
+elif soup.find(class_="secret"):
+    secret_code = soup.find(class_="secret").get_text().strip()
+else:
+    # Look for any element with "secret" in text
+    for elem in soup.find_all(['div', 'span', 'p', 'pre']):
+        if 'secret' in elem.get_text().lower():
+            secret_code = elem.get_text().strip()
+            break
+
+print(f"🔑 Found secret code: {{secret_code}}")
+
+# Step 3: Submit in the format shown in SECTION 1
+# SECTION 1 showed this format:
+# {{
+#   "email": "23f2003481@ds.study.iitm.ac.in",
+#   "secret": "your secret",
+#   "answer": "the secret code you scraped"
+# }}
+
+answer = {{
+    "email": "23f2003481@ds.study.iitm.ac.in",
+    "secret": "your secret",  # Use actual secret if known
+    "url": scrape_url,
+    "answer": secret_code
+}}
+
+# SECTION 1 said: "POST... to /submit"
+# SECTION 2 gives full URL: https://tds-llm-analysis.s-anand.net/submit
+submit_url = "https://tds-llm-analysis.s-anand.net/submit"
+
+print(f"📤 Submitting to: {{submit_url}}")
+print(f"📦 Payload: {{json.dumps(answer, indent=2)}}")
+
+submit_response = requests.post(
+    submit_url,
+    json=answer,
+    headers={{"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}}
+)
+
+print(f"📥 Submission response: {{submit_response.json()}}")
+```
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLE 2: BASE64 DECODING (NO EXTERNAL SCRAPING)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**SECTION 1 shows:** "Decode the hidden message and submit it"
+**SECTION 6 shows:** <pre id="secret">SGVsbG8gV29ybGQ=</pre>
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 TASK ANALYSIS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. QUESTION: "Decode the hidden message"
+
+2. DATA LOCATION STRATEGY:
+   ☑ Hidden on current page → Check SECTION 6 for Base64
+
+3. SCRAPING REQUIRED: NO (data is on current page)
+
+4. EXTRACTION METHOD:
+   - Find Base64 pattern in SECTION 6: <pre id="secret">
+   - Decode using base64.b64decode()
+
+5. EXPECTED ANSWER FORMAT: {{"message": "decoded text"}}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔎 EXTRACTION PROCESS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1: Found in SECTION 6 Raw HTML:
+   <pre id="secret">SGVsbG8gV29ybGQ=</pre>
+
+Step 2: Decoding Base64...
+   - Input: SGVsbG8gV29ybGQ=
+   - Decoded: Hello World
+
+✅ FINAL EXTRACTED DATA: {{"message": "Hello World"}}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Python code:**
+
+```python
+import requests
+import base64
+import json
+
+# The Base64 string (already identified from SECTION 6)
+encoded = "SGVsbG8gV29ybGQ="
+decoded_message = base64.b64decode(encoded).decode('utf-8')
+print(f"Decoded message: {{decoded_message}}")
+
+# Submit
+answer = {{"message": decoded_message}}
+submit_response = requests.post(
+    "https://quiz.example.com/submit",
+    json=answer,
+    headers={{"User-Agent": "Mozilla/5.0"}}
+)
+
+print(f"📥 Submission response: {{submit_response.json()}}")
+```
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLE 3: DOWNLOAD CSV AND CALCULATE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**SECTION 1 shows:** "Download the sales data and calculate total revenue"
+**SECTION 2 shows:** Link to https://example.com/data/sales.csv
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 TASK ANALYSIS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. QUESTION: "Calculate total revenue from sales data"
+
+2. DATA LOCATION STRATEGY:
+   ☑ Need to download file → https://example.com/data/sales.csv
+
+3. SCRAPING REQUIRED: YES (downloading CSV file)
+   - Target URL: https://example.com/data/sales.csv
+   - What to find: Revenue column
+   - Method: requests.get() + pandas
+
+4. EXTRACTION METHOD:
+   - Download CSV from URL
+   - Parse with pandas
+   - Sum the 'revenue' column
+
+5. EXPECTED ANSWER FORMAT: {{"total_revenue": 15000}}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔎 EXTRACTION PROCESS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1: Downloading https://example.com/data/sales.csv...
+   - Status: Success
+
+Step 2: Parsing with pandas...
+   - Columns: date, product, revenue
+   - Rows: 50 records
+
+Step 3: Computing total...
+   - Sum of 'revenue' column: 15000
+
+✅ FINAL EXTRACTED DATA: {{"total_revenue": 15000}}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Python code:**
+
+```python
+import requests
+import pandas as pd
+from io import StringIO
+import json
+
+# Download CSV (as identified)
+csv_url = "https://example.com/data/sales.csv"
+response = requests.get(csv_url, headers={{"User-Agent": "Mozilla/5.0"}})
+df = pd.read_csv(StringIO(response.text))
+
+# Calculate total revenue (as identified)
+total_revenue = df['revenue'].sum()
+print(f"Total revenue: {{total_revenue}}")
+
+# Submit
+answer = {{"total_revenue": int(total_revenue)}}
+submit_response = requests.post(
+    "https://quiz.example.com/submit",
+    json=answer,
+    headers={{"User-Agent": "Mozilla/5.0"}}
+)
+
+print(f"📥 Submission response: {{submit_response.json()}}")
+
+print(f"📥 Submission response: {{response.json()}}")
+```
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎓 COMPLETE SCRAPING EXAMPLES:
+
+**Example 1: Scrape external page and extract specific data**
+
+```
+ANALYSIS:
+1. Task: Scrape https://example.com/secret and get the hidden code
+2. Data Location: External URL in SECTION 2 (Links)
+3. Extraction Method: Scrape with requests, parse HTML, find code element
+4. Expected Format: String value
+
+EXTRACTION:
+Scraping https://example.com/secret...
+
+import requests
+from bs4 import BeautifulSoup
+
+url = "https://example.com/secret"
+response = requests.get(url, headers={{"User-Agent": "Mozilla/5.0"}})
+soup = BeautifulSoup(response.text, 'html.parser')
+
+# Found: <div id="code">ABC123</div>
+code_elem = soup.find('div', {{'id': 'code'}})
+code = code_elem.get_text().strip()
+
+✅ DATA EXTRACTED:
+- Type: String
+- Content: "ABC123"
+- Validation: Found in div#code element
+```
+
+**NOW generate the Python code:**
+
+```python
+import requests
+from bs4 import BeautifulSoup
+
+# Scrape external URL
+url = "https://example.com/secret"
+response = requests.get(url, headers={{"User-Agent": "Mozilla/5.0"}})
+soup = BeautifulSoup(response.text, 'html.parser')
+
+# Extract the code (already identified above)
+code = soup.find('div', {{'id': 'code'}}).get_text().strip()
+print(f"Found code: {{code}}")
+
+# Submit
+answer = {{"code": code}}
+submit_response = requests.post(
+    "https://quiz.com/submit",
+    json=answer,
+    headers={{"User-Agent": "Mozilla/5.0"}}
+)
+
+print(f"📥 Submission response: {{submit_response.json()}}")
+```
+
+**Example 2: Download CSV and calculate statistics**
+
+```
+ANALYSIS:
+1. Task: Download data.csv and calculate total sales
+2. Data Location: CSV file URL in SECTION 2 (Links): https://example.com/sales.csv
+3. Extraction Method: Download CSV with requests, parse with pandas, sum the 'sales' column
+4. Expected Format: Integer (total sum)
+
+EXTRACTION:
+Downloading https://example.com/sales.csv...
+
+import requests
+import pandas as pd
+from io import StringIO
+
+response = requests.get("https://example.com/sales.csv")
+df = pd.read_csv(StringIO(response.text))
+
+# CSV contains columns: date, product, sales
+# Rows:
+#   2024-01-01, Product A, 100
+#   2024-01-02, Product B, 250
+#   2024-01-03, Product A, 150
+
+total_sales = df['sales'].sum()  # = 500
+
+✅ DATA EXTRACTED:
+- Type: Integer
+- Content: 500
+- Validation: Sum of all values in 'sales' column
+```
+
+**NOW generate the Python code:**
+
 ```python
 import requests
 import pandas as pd
 from io import StringIO
 
-# For JSON APIs
-response = requests.get("https://api.example.com/data", headers={{"User-Agent": "Mozilla/5.0"}})
-data = response.json()
+# Download and parse CSV (already analyzed above)
+csv_url = "https://example.com/sales.csv"
+response = requests.get(csv_url, headers={{"User-Agent": "Mozilla/5.0"}})
+df = pd.read_csv(StringIO(response.text))
 
-# For CSV files (use AI assistant if complex)
-csv_response = requests.get("https://example.com/data.csv", headers={{"User-Agent": "Mozilla/5.0"}})
-df = pd.read_csv(StringIO(csv_response.text))
+# Calculate total (identified from analysis)
+total_sales = df['sales'].sum()
+print(f"Total sales: {{total_sales}}")
 
-# For plain text/HTML (simple GET)
-text_response = requests.get("https://example.com/page.html", headers={{"User-Agent": "Mozilla/5.0"}})
-html_text = text_response.text
-soup = BeautifulSoup(html_text, 'html.parser')
+# Submit
+answer = {{"total": total_sales}}
+submit_response = requests.post(
+    "https://quiz.com/submit",
+    json=answer,
+    headers={{"User-Agent": "Mozilla/5.0"}}
+)
+
+print(f"📥 Submission response: {{submit_response.json()}}")
 ```
 
-**Method 4: Extract from Current Page Content (no external fetch needed):**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**EXTRACTION PATTERNS REFERENCE:**
+
 ```python
 from bs4 import BeautifulSoup
-import re
-import json
+import re, json, base64
 
-# STEP 1: Check SECTION 1 (Text Content) first for visible answers
-# If the question asks "What is X?" and X is shown on the page, it's here!
+# ALWAYS START HERE: Read the task in SECTION 1 carefully!
+# The answer format and location are usually explained clearly
 
-# STEP 2: If data is hidden, check SECTION 6 (Raw HTML)
-# Look for these patterns in the Raw HTML section below:
+html = "..."  # From SECTION 6: Raw HTML Source Code
 
-# Pattern 1: JavaScript variables
-# var data = {{"key": "value"}};
-# const info = [...];
-# let result = "answer";
+# ═══════════════════════════════════════════════════════════
+# PATTERN 1: BASE64 ENCODED DATA (Very Common!)
+# ═══════════════════════════════════════════════════════════
+# Looks like: "SGVsbG8gV29ybGQ=" or longer alphanumeric strings
+# Often in: <pre>, <code>, script tags, or as text content
 
-# Pattern 2: Hidden form inputs
-# <input type="hidden" id="answer" value="...">
+# Find all base64-like strings (40+ chars)
+base64_candidates = re.findall(r'[A-Za-z0-9+/]{{40,}}={{{0,2}}}', html)
+for encoded_text in base64_candidates:
+    try:
+        decoded = base64.b64decode(encoded_text).decode('utf-8')
+        print(f"Decoded Base64: {{decoded}}")
+        
+        # Check if decoded text is JSON
+        if decoded.strip().startswith('{{'):
+            try:
+                data = json.loads(decoded)
+                print(f"Base64 contained JSON: {{data}}")
+            except: pass
+            
+        # Check for secret/answer keywords
+        if 'secret' in decoded.lower() or 'answer' in decoded.lower():
+            print(f"Found potential answer in base64: {{decoded}}")
+    except: 
+        continue
 
-# Pattern 3: JSON in script tags
-# <script type="application/json">{{...}}</script>
+# ═══════════════════════════════════════════════════════════
+# PATTERN 2: JAVASCRIPT VARIABLES (var/const/let)
+# ═══════════════════════════════════════════════════════════
+soup = BeautifulSoup(html, 'html.parser')
+scripts = soup.find_all('script')
+for script in scripts:
+    if not script.string: continue
+    
+    # Extract JSON objects: var data = {{"key": "value"}};
+    json_objects = re.findall(r'(?:var|const|let)\s+\w+\s*=\s*(\{[^;]+\});?', script.string, re.DOTALL)
+    for json_str in json_objects:
+        try:
+            data = json.loads(json_str)
+            print(f"JS Object found: {{data}}")
+        except: pass
+    
+    # Extract string values: var secret = "value123";
+    string_vars = re.findall(r'(?:var|const|let)\s+(\w+)\s*=\s*["\']([^"\']+)["\']', script.string)
+    for var_name, var_value in string_vars:
+        print(f"JS String: {{var_name}} = {{var_value}}")
+    
+    # Extract number values: const answer = 42;
+    num_vars = re.findall(r'(?:var|const|let)\s+(\w+)\s*=\s*(\d+\.?\d*)', script.string)
+    for var_name, var_value in num_vars:
+        print(f"JS Number: {{var_name}} = {{var_value}}")
 
-# Pattern 4: Base64 encoded data
-# var encoded = "SGVsbG8gV29ybGQ=";
-# function decode() {{ return atob(encoded); }}
-
-# Example extraction:
-html_from_raw_section = "..."  # Copy from SECTION 6: Raw HTML Source Code below
-soup = BeautifulSoup(html_from_raw_section, 'html.parser')
-
-# Extract hidden inputs
+# ═══════════════════════════════════════════════════════════
+# PATTERN 3: HIDDEN FORM INPUTS
+# ═══════════════════════════════════════════════════════════
 hidden_inputs = soup.find_all('input', type='hidden')
 for inp in hidden_inputs:
-    print(f"Hidden: {{inp.get('id')}} = {{inp.get('value')}}")
+    name = inp.get('name') or inp.get('id')
+    value = inp.get('value')
+    print(f"Hidden input: {{name}} = {{value}}")
 
-# Extract JavaScript variables
-script_tags = soup.find_all('script')
-for script in script_tags:
-    script_text = script.string or ''
-    
-    # Look for var/const/let declarations
-    if 'var ' in script_text or 'const ' in script_text or 'let ' in script_text:
-        # Extract JSON objects
-        json_match = re.search(r'(?:var|const|let)\s+\w+\s*=\s*(\{{.*?\}});', script_text, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(1))
-                print(f"Found data: {{data}}")
-            except:
-                pass
+# ═══════════════════════════════════════════════════════════
+# PATTERN 4: DATA ATTRIBUTES (data-*, custom attributes)
+# ═══════════════════════════════════════════════════════════
+# Look for: <div data-secret="xyz">, <span id="answer">xyz</span>
+for elem in soup.find_all(attrs={{lambda x: x and (x.startswith('data-') or x in ['secret', 'answer', 'code'])}}):
+    for attr, value in elem.attrs.items():
+        if attr.startswith('data-') or attr in ['secret', 'answer', 'code']:
+            print(f"Attribute: {{attr}} = {{value}}")
+
+# ═══════════════════════════════════════════════════════════
+# PATTERN 5: JSON IN SCRIPT TAGS
+# ═══════════════════════════════════════════════════════════
+json_scripts = soup.find_all('script', type='application/json')
+for script in json_scripts:
+    try:
+        data = json.loads(script.string)
+        print(f"JSON script tag: {{data}}")
+    except: pass
+
+# ═══════════════════════════════════════════════════════════
+# PATTERN 6: TEXT CONTENT WITH KEYWORDS
+# ═══════════════════════════════════════════════════════════
+# Sometimes answer is in plain text with markers
+for keyword in ['secret:', 'answer:', 'code:', 'result:']:
+    if keyword in html.lower():
+        # Extract text after keyword
+        match = re.search(rf'{keyword}\s*([^\s<]+)', html, re.I)
+        if match:
+            print(f"Found {{keyword}} {{match.group(1)}}")
 ```
 
 📤 SUBMISSION:
@@ -843,30 +1474,105 @@ print("📥 Response:", response.json())
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Now generate a complete, executable Python script that:
-1. Analyzes the content above
-2. Determines if external scraping is needed or if data is already provided
-3. **If scraping is needed: Use ai_scrape_and_extract() function (AI-powered assistant)**
-4. Extracts/computes the required data
-5. Formats the answer correctly
-6. Submits it with proper print statements
+⚠️⚠️⚠️ CRITICAL INSTRUCTIONS ⚠️⚠️⚠️
 
-🤖 **IMPORTANT**: When you need to scrape external URLs, USE the ai_scrape_and_extract() function!
-It will automatically:
-- Scrape the URL for you
-- Use AI to extract the exact data you need
-- Return clean, structured data
-- Handle complex HTML parsing automatically
+**DO NOT use LLMFunc, LLMScraperHandler, or any custom modules!**
+**These are NOT available in the generated script environment!**
 
-Example: Instead of manually parsing HTML, just call:
+🎯 **YOUR MISSION:**
+
+Read the QUESTION in SECTION 1 below carefully. It will tell you exactly what to do.
+Common patterns:
+- "Visit the page at [URL] and find..." → SCRAPE that URL!
+- "Download the file from [URL] and calculate..." → DOWNLOAD and process!
+- "Decode the hidden message..." → Look in SECTION 6 for Base64/encoded data!
+- "Find the secret in the linked page..." → Check SECTION 2 for the link, then SCRAPE it!
+
+Now generate a complete, executable Python script following this workflow:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 1: 🔍 WRITE YOUR ANALYSIS FIRST (mandatory format shown in examples)
+   
+   📋 TASK ANALYSIS:
+   1. QUESTION: [Copy exact question from SECTION 1]
+   2. DATA LOCATION STRATEGY: [Where is the data?]
+   3. SCRAPING REQUIRED: [YES/NO - if YES, which URL?]
+   4. EXTRACTION METHOD: [Step by step plan]
+   5. EXPECTED ANSWER FORMAT: [JSON structure]
+
+   🔎 EXTRACTION PROCESS:
+   [Perform the actual extraction - scrape URLs, decode data, etc.]
+   [Show what you found]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 2: 📊 VALIDATE YOUR EXTRACTION
+   
+   ✅ VALIDATION CHECKLIST:
+   ☐ Does this data answer the question?
+   ☐ Is the format correct?
+   ☐ Did I scrape the correct URL if needed?
+   
+   FINAL ANSWER: {{"key": "value"}}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 3: 💻 GENERATE COMPLETE PYTHON CODE
+
+Requirements:
+   ✅ Use ONLY: requests, BeautifulSoup, pandas, re, json, base64
+   ✅ If scraping needed: Include requests.get() with the target URL
+   ✅ Extract data using the method identified in your analysis
+   ✅ Format answer as JSON
+   ✅ Submit with proper print statements
+   ✅ Handle errors gracefully
+
+🚫 **BANNED IMPORTS:**
 ```python
-data = asyncio.run(ai_scrape_and_extract(
-    url_to_scrape="https://example.com/data",
-    extraction_instructions="Extract all table rows as a list of dictionaries"
-))
+from LLMFunc import LLMScraperHandler  # ❌ NOT AVAILABLE!
+from LLMFunc import anything  # ❌ NOT AVAILABLE!
+import asyncio  # ❌ Only if absolutely necessary
 ```
 
-Write the COMPLETE code with NO placeholders. Use AI-powered scraping when needed!"""
+✅ **ALLOWED IMPORTS:**
+```python
+import requests  # ✅ For HTTP requests and scraping
+from bs4 import BeautifulSoup  # ✅ For HTML parsing
+import pandas as pd  # ✅ For CSV/data processing
+import re  # ✅ For regex patterns
+import json  # ✅ For JSON handling
+import base64  # ✅ For Base64 decoding
+from io import StringIO  # ✅ For CSV parsing
+```
+
+📝 **YOUR CODE STRUCTURE:**
+```python
+import requests
+from bs4 import BeautifulSoup
+import json
+# ... other standard imports
+
+# If external scraping is needed:
+url = "https://example.com/data"
+response = requests.get(url, headers={{"User-Agent": "Mozilla/5.0"}})
+soup = BeautifulSoup(response.text, 'html.parser')
+
+# Extract data (use examples above as reference)
+data = soup.find('div', {{'id': 'secret'}}).get_text()
+
+# Submit
+answer = {{"key": data}}
+submit_response = requests.post(
+    submission_url,
+    json=answer,
+    headers={{"User-Agent": "Mozilla/5.0"}}
+)
+
+print(f"📥 Submission response: {{submit_response.json()}}")
+```
+
+Write the COMPLETE code with NO placeholders. Use standard scraping libraries only!"""
 
 
 if __name__ == "__main__":
