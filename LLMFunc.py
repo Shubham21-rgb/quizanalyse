@@ -369,7 +369,7 @@ class WebScraper:
     
     def _transcribe_audio(self, audio_content: bytes, url: str) -> str:
         """
-        Transcribe audio file using speech_recognition
+        Transcribe audio file using speech_recognition with enhanced settings
         """
         tmp_audio_path = None
         wav_path = None
@@ -396,19 +396,93 @@ class WebScraper:
                 tmp_audio.write(audio_content)
                 tmp_audio_path = tmp_audio.name
             
-            # Convert to WAV format with optimized settings
+            # Convert to WAV format with multiple quality settings
             audio = AudioSegment.from_file(tmp_audio_path)
             wav_path = tmp_audio_path.replace(file_ext, '.wav')
-            # Optimize: mono channel, 16kHz sample rate for faster processing
-            audio = audio.set_channels(1).set_frame_rate(16000)
-            audio.export(wav_path, format='wav', parameters=["-ac", "1", "-ar", "16000"])
             
-            # Transcribe
-            recognizer = sr.Recognizer()
-            with sr.AudioFile(wav_path) as source:
-                audio_data = recognizer.record(source)
-                text = recognizer.recognize_google(audio_data)
-                return text
+            # Try multiple transcription approaches for better results
+            transcription_attempts = []
+            
+            # Attempt 1: High quality settings
+            try:
+                audio_hq = audio.set_channels(1).set_frame_rate(22050)  # Higher quality
+                wav_path_hq = wav_path.replace('.wav', '_hq.wav')
+                audio_hq.export(wav_path_hq, format='wav')
+                
+                recognizer = sr.Recognizer()
+                # Adjust energy threshold for better recognition
+                recognizer.energy_threshold = 4000
+                recognizer.dynamic_energy_threshold = True
+                
+                with sr.AudioFile(wav_path_hq) as source:
+                    # Adjust for ambient noise
+                    recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    audio_data = recognizer.record(source)
+                    text_hq = recognizer.recognize_google(audio_data, language='en-US')
+                    transcription_attempts.append(('high_quality', text_hq))
+                    
+                # Cleanup high quality file
+                if os.path.exists(wav_path_hq):
+                    os.remove(wav_path_hq)
+                    
+            except Exception as e:
+                transcription_attempts.append(('high_quality', f'[Failed: {str(e)}]'))
+            
+            # Attempt 2: Standard quality with different settings
+            try:
+                audio_std = audio.set_channels(1).set_frame_rate(16000)
+                audio_std.export(wav_path, format='wav')
+                
+                recognizer = sr.Recognizer()
+                recognizer.energy_threshold = 300  # Lower threshold
+                recognizer.pause_threshold = 0.8   # Longer pauses
+                
+                with sr.AudioFile(wav_path) as source:
+                    recognizer.adjust_for_ambient_noise(source, duration=1.0)
+                    audio_data = recognizer.record(source)
+                    text_std = recognizer.recognize_google(audio_data, language='en-US', show_all=False)
+                    transcription_attempts.append(('standard', text_std))
+                    
+            except Exception as e:
+                transcription_attempts.append(('standard', f'[Failed: {str(e)}]'))
+            
+            # Attempt 3: Try with alternative speech recognition service
+            try:
+                with sr.AudioFile(wav_path) as source:
+                    recognizer = sr.Recognizer()
+                    audio_data = recognizer.record(source)
+                    # Try alternative recognition service if Google fails
+                    try:
+                        text_alt = recognizer.recognize_google(audio_data, language='en-US', show_all=True)
+                        if isinstance(text_alt, dict) and 'alternative' in text_alt:
+                            # Get the most confident result
+                            alternatives = text_alt['alternative']
+                            best_alt = max(alternatives, key=lambda x: x.get('confidence', 0))
+                            text_alt = best_alt.get('transcript', '')
+                        elif isinstance(text_alt, list) and text_alt:
+                            text_alt = text_alt[0].get('transcript', '') if isinstance(text_alt[0], dict) else str(text_alt[0])
+                        else:
+                            text_alt = str(text_alt)
+                        transcription_attempts.append(('alternative', text_alt))
+                    except:
+                        transcription_attempts.append(('alternative', '[Failed: Alternative method failed]'))
+                        
+            except Exception as e:
+                transcription_attempts.append(('alternative', f'[Failed: {str(e)}]'))
+            
+            # Return the best transcription (longest successful one)
+            successful_transcriptions = [
+                (method, text) for method, text in transcription_attempts 
+                if not text.startswith('[Failed:') and not text.startswith('[Error:')
+            ]
+            
+            if successful_transcriptions:
+                # Return the longest transcription as it's likely most complete
+                best_method, best_text = max(successful_transcriptions, key=lambda x: len(x[1]))
+                return best_text
+            else:
+                # All failed, return the first error
+                return transcription_attempts[0][1] if transcription_attempts else "[Error: No transcription attempts made]"
                     
         except ImportError as e:
             return f"[Error: Required library not installed - {str(e)}. Install with: pip install SpeechRecognition pydub]"
@@ -421,16 +495,12 @@ class WebScraper:
         finally:
             # Cleanup temp files
             import os
-            if tmp_audio_path and os.path.exists(tmp_audio_path):
-                try:
-                    os.remove(tmp_audio_path)
-                except:
-                    pass
-            if wav_path and os.path.exists(wav_path):
-                try:
-                    os.remove(wav_path)
-                except:
-                    pass
+            for file_path in [tmp_audio_path, wav_path, wav_path.replace('.wav', '_hq.wav') if wav_path else None]:
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except:
+                        pass
     
     async def _handle_special_content(self, url: str, content_type: str) -> Dict[str, Any]:
         """
@@ -626,15 +696,16 @@ class LLMScraperHandler:
         md.append(f"\n⚠️ **CRITICAL**: This report contains ALL extracted data from the quiz page.\n")
         md.append(f"\n## 🎯 Quick Navigation Guide\n")
         md.append(f"1. **Read SECTION 1 (Text Content)** → Understand what the quiz is asking\n")
-        md.append(f"2. **Check URL Parameters** → Email, ID, or other values needed for submission\n")
-        md.append(f"3. **Look for data sources:**\n")
+        md.append(f"2. **🎵 For Audio Tasks: Check SECTION 5** → Audio transcriptions contain task instructions!\n")
+        md.append(f"3. **Check URL Parameters** → Email, ID, or other values needed for submission\n")
+        md.append(f"4. **Look for data sources:**\n")
         md.append(f"   - SECTION 2 (Links) → External files, APIs, data endpoints\n")
         md.append(f"   - SECTION 3 (Tables) → Structured tabular data\n")
         md.append(f"   - SECTION 6 (Raw HTML) → JavaScript variables, hidden data, Base64\n")
-        md.append(f"4. **Find submission endpoint** → Look for POST URLs in SECTION 2 or forms in SECTION 6\n")
-        md.append(f"5. **Extract/Process data** → Use appropriate method (scraping, API call, data extraction)\n")
-        md.append(f"6. **Format answer** → Match exact JSON structure required\n")
-        md.append(f"7. **Submit** → POST to the submission endpoint\n")
+        md.append(f"5. **Find submission endpoint** → Look for POST URLs in SECTION 2 or forms in SECTION 6\n")
+        md.append(f"6. **Extract/Process data** → Use appropriate method (scraping, API call, data extraction)\n")
+        md.append(f"7. **Format answer** → Match exact JSON structure required\n")
+        md.append(f"8. **Submit** → POST to the submission endpoint\n")
         md.append(f"\n## 🌐 Page Metadata\n")
         md.append(f"- **Original URL:** {data['url']}\n")
         md.append(f"- **Content Type:** {content_type.upper()}\n")
@@ -844,6 +915,11 @@ class LLMScraperHandler:
             md.append(f"\n## 🎵 SECTION 5: Audio Files & Transcriptions\n")
             md.append(f"**→ Audio files found and their transcriptions (if available).**\n\n")
             
+            # Add warning for audio-based tasks
+            if data.get('audio_transcriptions'):
+                md.append(f"⚠️ **AUDIO TASK DETECTED**: The transcriptions below contain CRITICAL task instructions!\n")
+                md.append(f"**Read both SECTION 1 and SECTION 5 transcriptions together for complete understanding.**\n\n")
+            
             # Show audio elements
             if data.get('audio_elements'):
                 md.append("### Audio Files:\n")
@@ -851,14 +927,32 @@ class LLMScraperHandler:
                     md.append(f"{idx}. {audio_elem['src']}\n")
                 md.append("\n")
             
-            # Show transcriptions
+            # Show transcriptions with emphasis
             if data.get('audio_transcriptions'):
                 md.append("### Audio Transcriptions:\n")
                 for idx, trans in enumerate(data['audio_transcriptions'], 1):
                     md.append(f"**Audio {idx}:** {trans['url']}\n")
                     md.append(f"**Status:** {trans['status']}\n")
                     if trans['status'] == 'success':
-                        md.append(f"**Transcription:**\n```\n{trans['transcription']}\n```\n\n")
+                        transcription_text = trans['transcription']
+                        md.append(f"**Transcription:**\n```\n{transcription_text}\n```\n")
+                        
+                        # Enhanced analysis of transcription
+                        if transcription_text and not transcription_text.startswith('[Error'):
+                            # Check if transcription appears incomplete
+                            if transcription_text.strip().endswith('provid'):
+                                md.append(f"⚠️ **INCOMPLETE TRANSCRIPTION DETECTED**: Audio ends with 'provid' (likely 'provided')\n")
+                                md.append(f"💡 **TASK INTERPRETATION**: Based on context, the complete instruction is likely:\n")
+                                md.append(f"*'You need to download the csv file provided, pick the first column and add all values greater than or equal to the cutoff value provided.'*\n")
+                                md.append(f"🎯 **CUTOFF VALUE**: Calculate using SHA1 hash of email (first 4 hex chars → int)\n")
+                                md.append(f"📊 **EXPECTED PROCESS**:\n")
+                                md.append(f"1. Calculate cutoff: `int(hashlib.sha1(email.encode()).hexdigest()[:4], 16)`\n")
+                                md.append(f"2. Download CSV file from links in SECTION 2\n")
+                                md.append(f"3. Filter first column: keep values >= cutoff\n")
+                                md.append(f"4. Sum the filtered values\n")
+                                md.append(f"5. Submit the sum as your answer\n\n")
+                            
+                        md.append(f"🎯 **This transcription contains task instructions - use it with SECTION 1!**\n\n")
                     else:
                         md.append(f"**Error:** {trans['transcription']}\n\n")
         

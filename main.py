@@ -4,9 +4,11 @@ from fastapi.responses import JSONResponse
 import pandas as pd
 import json
 import os
+import asyncio
 from dotenv import load_dotenv
 from fastapi.responses import HTMLResponse
 import requests
+from demo_scrape_handler import handle_demo_scrape_url
 
 # Import LangChain Agent (with fallback to simple agent)
 try:
@@ -16,11 +18,20 @@ try:
 except ImportError as e:
     print(f"⚠️ LangChain not available: {e}")
     print("📦 Falling back to simple agent")
-    from agent import AIAgent
+    from simple_agent import AIAgent
     LANGCHAIN_AVAILABLE = False
 
 app = FastAPI()
 load_dotenv()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Configuration
 api_key = os.getenv("AI_PIPE_TOKEN_1")
@@ -56,10 +67,11 @@ def greet_json():
     }
 
 @app.post("/quiz")
-async def handle_quiz(request: Request):
+async def handle_quiz(request: Request, background_tasks: BackgroundTasks):
     """
     Main endpoint to receive quiz requests and solve them
     Expected payload: {"email": "...", "secret": "...", "url": "..."}
+    Returns immediate 200 response when secret is correct and processes in background
     """
     try:
         body = await request.json()
@@ -84,18 +96,83 @@ async def handle_quiz(request: Request):
             content={"error": "Invalid secret"}
         )
     
-    # Start solving the quiz
+    # Secret is correct - return immediate 200 response
     print(f"\n{'='*60}")
-    print(f"🎯 New Quiz Request Received")
+    print(f"🎯 New Quiz Request Received - Secret Verified")
     print(f"Email: {email}")
     print(f"Starting URL: {url}")
     print(f"Request Body: {json.dumps(body, indent=2)}")
     print(f"{'='*60}\n")
     
-    # Process the quiz URL with full request body
-    result = await process_quiz_url(url, email, body)
+    # Add quiz processing to background tasks
+    background_tasks.add_task(process_quiz_chain, url, email, body)
     
-    return JSONResponse(content=result)
+    # Return immediate success response
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": True,
+            "message": "Quiz processing started",
+            "status": "accepted",
+            "email": email,
+            "url": url
+        }
+    )
+
+async def process_quiz_chain(url: str, email: str, request_body: dict = None, force_dynamic: bool = True):
+    """
+    Background task to process the entire quiz chain until no new URL is returned
+    """
+    depth = 0
+    current_url = url
+    max_quiz_limit = 50  # Safety limit to prevent infinite loops
+    
+    print(f"\n🔄 Starting Quiz Chain Processing")
+    print(f"Initial URL: {current_url}")
+    print(f"Email: {email}")
+    
+    try:
+        while current_url and depth < max_quiz_limit:
+            print(f"\n{'='*60}")
+            print(f"📥 Processing Quiz #{depth + 1}")
+            print(f"URL: {current_url}")
+            print(f"{'='*60}")
+            
+            # Process current quiz URL
+            result = await process_quiz_url(current_url, email, request_body, force_dynamic, depth)
+            
+            if not result.get('success'):
+                print(f"❌ Quiz #{depth + 1} failed: {result.get('error', 'Unknown error')}")
+                break
+            
+            # Check if there's a next URL to process
+            next_url = result.get('next_url')
+            if next_url and next_url.strip():
+                print(f"🔗 Found next URL: {next_url}")
+                current_url = next_url
+                depth += 1
+                
+                # Add delay if specified by server
+                delay = result.get('delay')
+                if delay and delay > 0:
+                    print(f"⏳ Waiting {delay} seconds as requested by server...")
+                    import asyncio
+                    await asyncio.sleep(delay)
+            else:
+                print(f"✅ Quiz chain completed! No more URLs to process.")
+                print(f"📊 Total quizzes processed: {depth + 1}")
+                break
+        
+        if depth >= max_quiz_limit:
+            print(f"⚠️ Reached maximum quiz limit ({max_quiz_limit}). Stopping to prevent infinite loop.")
+        
+        print(f"\n🎉 Quiz Chain Processing Complete!")
+        print(f"📈 Summary: Processed {depth + 1} quiz(s)")
+        
+    except Exception as e:
+        print(f"❌ Quiz chain processing failed: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
 
 async def process_quiz_url(url: str, email: str, request_body: dict = None, force_dynamic: bool = True, depth: int = 0, max_retries: int = 3):
     """
@@ -110,12 +187,53 @@ async def process_quiz_url(url: str, email: str, request_body: dict = None, forc
         depth: Quiz sequence depth (for tracking)
         max_retries: Maximum retry attempts for incorrect answers (default: 3)
     """
+    
     from LLMFunc import LLMScraperHandler
     
     print(f"\n{'='*60}")
     print(f"📥 Quiz #{depth + 1} - Scraping URL: {url}")
     print(f"📁 Working Directory: {os.getcwd()}")
     print(f"{'='*60}")
+    
+    # Universal handler for ALL URLs - handles any quiz type robustly
+    print(f"🎯 Using Universal Quiz Handler for URL analysis")
+    
+    # First try universal handler for common patterns
+    if any(pattern in url.lower() for pattern in ['demo-scrape', 'demo-audio', 'quiz', 'challenge']):
+        print(f"🚀 URL matches known patterns - using Universal Handler first")
+        
+        try:
+            # Use the universal handler directly
+            result = await handle_demo_scrape_url(url, email)
+            
+            if result.get('success') and result.get('correct'):
+                print(f"✅ Universal handler succeeded")
+                return {
+                    "success": True,
+                    "correct": result.get('correct'),
+                    "quiz_number": depth + 1,
+                    "execution_output": result.get('execution_output', 'Universal handler completed'),
+                    "next_url": result.get('next_url'),
+                    "delay": result.get('delay'),
+                    "reason": result.get('reason', ''),
+                    "method": "universal_handler"
+                }
+            elif result.get('success') and not result.get('correct'):
+                print(f"🔄 Universal handler attempted but answer was incorrect: {result.get('reason')}")
+                print(f"🎯 Falling back to LLM-based analysis for more complex solving...")
+                # Fall through to LLM processing
+            else:
+                print(f"⚠️ Universal handler failed: {result.get('error', 'Unknown error')}")
+                print(f"🎯 Falling back to LLM-based analysis...")
+                # Fall through to LLM processing
+                
+        except Exception as e:
+            print(f"❌ Exception in universal handler: {str(e)}")
+            print(f"🎯 Falling back to LLM-based analysis...")
+            # Fall through to LLM processing
+    
+    # If universal handler didn't work or URL doesn't match patterns, use LLM processing
+    print(f"🤖 Using LLM-based processing for complex analysis")
     handler = LLMScraperHandler()
     
     # Scrape the webpage
@@ -369,33 +487,16 @@ QUIZ PAGE CONTENT:
                         print(f"\n✅ CORRECT ANSWER! 🎯")
                         print(f"🎉 Quiz #{depth + 1} solved successfully!")
                         
-                        # Check if there's a next URL to process
-                        if next_url and next_url.strip():
-                            print(f"🔗 Next quiz URL provided: {next_url}")
-                            
-                            # Add delay if specified by server
-                            if delay and delay > 0:
-                                print(f"⏳ Waiting {delay} seconds as requested by server...")
-                                import time
-                                time.sleep(delay)
-                            
-                            # Recursively process next URL
-                            print(f"\n{'='*60}")
-                            print(f"🔄 Moving to Next Quiz (#{depth + 2})")
-                            print(f"{'='*60}\n")
-                            return await process_quiz_url(next_url, email, request_body, force_dynamic, depth + 1, max_retries)
-                        else:
-                            # No next URL - quiz sequence complete
-                            print(f"\n🎉 QUIZ SEQUENCE COMPLETE!")
-                            print(f"📊 Total quizzes solved: {depth + 1}")
-                            print(f"🏆 All answers correct!")
-                            return {
-                                "success": True,
-                                "correct": True,
-                                "total_quizzes": depth + 1,
-                                "execution_output": result.stdout,
-                                "final_quiz": True
-                            }
+                        # Return success with next_url if available
+                        return {
+                            "success": True,
+                            "correct": True,
+                            "quiz_number": depth + 1,
+                            "execution_output": result.stdout,
+                            "next_url": next_url,
+                            "delay": delay,
+                            "reason": reason
+                        }
                     else:
                         # Incorrect answer
                         print(f"\n❌ INCORRECT ANSWER")
@@ -412,24 +513,15 @@ QUIZ PAGE CONTENT:
                         else:
                             print(f"🛑 Maximum retries ({max_retries}) reached for this quiz")
                             
-                            # Check if there's a next URL even after incorrect answer
-                            if next_url and next_url.strip():
-                                print(f"⚠️ Server provided next URL despite incorrect answer: {next_url}")
-                                print(f"🔄 Continuing to next quiz...")
-                                
-                                # Add delay if specified
-                                if delay and delay > 0:
-                                    import time
-                                    time.sleep(delay)
-                                
-                                return await process_quiz_url(next_url, email, request_body, force_dynamic, depth + 1, max_retries)
-                            
+                                # Return failure with next_url if available
                             return {
                                 "success": False,
                                 "correct": False,
                                 "reason": reason,
                                 "retries_exhausted": True,
-                                "execution_output": result.stdout
+                                "execution_output": result.stdout,
+                                "next_url": next_url,
+                                "delay": delay
                             }
                 
                 # If no submission response was captured, treat as execution success but no validation
@@ -1587,7 +1679,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     
     try:
-        uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
     except KeyboardInterrupt:
         print("\n🛑 Server stopped by user")
         sys.exit(0)

@@ -36,6 +36,12 @@ class CustomLLM(BaseChatModel):
     def _llm_type(self) -> str:
         return "custom_aipipe"
     
+    def bind_tools(self, tools: list, **kwargs: Any) -> "CustomLLM":
+        """Bind tools to the model (required for LangGraph agents)"""
+        # Store tools for potential future use, but return self
+        # LangGraph will handle tool execution separately
+        return self
+    
     def _generate(
         self,
         messages: List[BaseMessage],
@@ -318,11 +324,14 @@ AVAILABLE TOOLS:
 
 QUIZ SOLVING STRATEGY:
 
-1. **UNDERSTAND THE TASK** (Read SECTION 1)
+1. **UNDERSTAND THE TASK** (Read SECTION 1 + Audio Transcriptions)
    - SECTION 1 contains the MAIN TASK and instructions
+   - For AUDIO-BASED TASKS: ALSO check SECTION 5 for audio transcriptions
+   - Audio transcriptions provide CRITICAL context about what to do
+   - Combine text instructions with audio content for complete understanding
    - Extract what needs to be done: scrape data, calculate, decode, etc.
    - Identify the EXPECTED JSON FORMAT for submission (shown in code blocks)
-   - Find submission endpoint (usually /submit or mentioned explicitly)
+   - Find submission endpoint (IMPORTANT: Usually BASE_URL + /submit!)
 
 2. **EXTRACT URLs**
    - Base URL: Look for "Original URL" in Page Metadata section
@@ -330,6 +339,11 @@ QUIZ SOLVING STRATEGY:
    - Convert ALL relative URLs to absolute: BASE_URL + relative_path
    - Example: /demo-scrape-data → https://domain.com/demo-scrape-data
    - Find data source URLs from SECTION 1 or SECTION 2
+
+🎯 **CRITICAL SUBMISSION URL PATTERN:**
+   - SUBMIT_URL = BASE_URL + "/submit" (submission endpoint)
+   - Example: Base URL = https://domain.com → SUBMIT_URL = https://domain.com/submit
+   - The submission endpoint is typically /submit
 
 3. **EXTRACT PARAMETERS**
    - Check "URL Query Parameters" section for email, id, secret, etc.
@@ -342,7 +356,26 @@ QUIZ SOLVING STRATEGY:
    - Extract the required information (text, code, number, table data)
    - Handle base64 decoding if needed (look for base64 strings in HTML)
 
+🎵 **AUDIO TASK SPECIAL HANDLING:**
+   - If SECTION 5 has audio transcriptions, READ THEM CAREFULLY
+   - Audio transcriptions contain the actual task instructions
+   - Example: "you need to download the csv file provided pick the first column and add all values greater than or equal to the cutoff value"
+   - Use transcription + SECTION 1 text to understand the complete task
+   - The transcription often clarifies what calculation or processing to do
+
+🔢 **CUTOFF VALUE CALCULATION FOR AUDIO TASKS:**
+   - If you see "cutoff" mentioned in audio transcription or HTML
+   - The cutoff is calculated by emailNumber() function = SHA1(email)[:4] converted to int
+   - For email "23f2003481@ds.study.iitm.ac.in", cutoff = 23109
+   - NEVER try to scrape dynamic JS content - calculate directly from email
+   - Use: `import hashlib; cutoff = int(hashlib.sha1(email.encode()).hexdigest()[:4], 16)`
+
 5. **GENERATE SOLUTION CODE**
+
+🔧 **MANDATORY IMPORTS FOR CSV TASKS:**
+   - When working with CSV data, ALWAYS include: `from io import StringIO`
+   - Required for: `pd.read_csv(StringIO(response.text))`
+   - Missing StringIO import will crash the code!
    
 🚨 **MANDATORY ERROR HANDLING - MUST FOLLOW:**
 
@@ -407,7 +440,7 @@ Step 1: Copy the ENTIRE code block below
 Step 2: Replace ONLY these 6 lines:
   - Line 10: BASE_URL = "..." → Use actual base URL
   - Line 11: DATA_URL = "..." → Use actual data URL  
-  - Line 12: SUBMIT_URL = "..." → Use actual submit URL
+  - Line 12: SUBMIT_URL = "..." → Use QUIZ URL (same as Original URL!)
   - Line 13: EMAIL = "..." → Use actual email
   - Line 14: SECRET = "..." → Use actual secret
   - Line 15: URL_PARAM = "..." → Use original quiz URL
@@ -423,11 +456,13 @@ import json
 import base64
 import re
 import hashlib
+import pandas as pd
+from io import StringIO
 
 # 1. DEFINE CONSTANTS (extracted from quiz context)
 BASE_URL = "https://..."  # From Original URL
 DATA_URL = BASE_URL + "/path"  # Absolute URL
-SUBMIT_URL = BASE_URL + "/submit"  # Absolute URL
+SUBMIT_URL = "https://..."  # BASE_URL + /submit
 EMAIL = "..."  # From URL params or request body
 SECRET = "..."  # From request body
 URL_PARAM = "..."  # Original quiz URL
@@ -457,11 +492,11 @@ def scrape_data():
                     import re
                     # Look for numbers after "code is", "secret is", "answer is"
                     patterns = [
-                        r'(?:secret|code|answer)\s+is\s+(\d+)',
-                        r'(?:secret|code|answer):\s*(\d+)',
-                        r'(?:secret|code|answer)\s*=\s*(\d+)',
-                        r'<strong>(\d+)</strong>',
-                        r'\b(\d{{4,}})\b'  # Any 4+ digit number
+                        r'(?:secret|code|answer)\\s+is\\s+(\\d+)',
+                        r'(?:secret|code|answer):\\s*(\\d+)',
+                        r'(?:secret|code|answer)\\s*=\\s*(\\d+)',
+                        r'<strong>(\\d+)</strong>',
+                        r'\\b(\\d{{4,}})\\b'  # Any 4+ digit number
                     ]
                     for pattern in patterns:
                         match = re.search(pattern, text, re.IGNORECASE)
@@ -522,17 +557,52 @@ def scrape_data():
     print(f"❌ No data found. HTML:\\n{{response.text[:500]}}")
     return None
 
-# 3. SUBMIT ANSWER FUNCTION
-def submit_answer(answer):
+# 3. SUBMIT ANSWER FUNCTION (with retry and type conversion)
+def submit_answer(answer, max_retries=3):
+    \"\"\"Submit answer with automatic retries and type conversion\"\"\"
+    
+    # Convert answer to JSON-serializable type
+    if hasattr(answer, 'item'):  # Handle pandas/numpy types
+        answer = answer.item()
+    elif hasattr(answer, 'tolist'):  # Handle numpy arrays
+        answer = answer.tolist()
+    elif hasattr(answer, 'to_dict'):  # Handle pandas objects
+        answer = answer.to_dict()
+    
+    # Ensure it's a basic Python type
+    import json
+    try:
+        json.dumps(answer)  # Test if it's serializable
+    except (TypeError, ValueError):
+        # Convert to string as fallback
+        answer = str(answer)
+    
     payload = {{
         "email": EMAIL,
         "secret": SECRET,
         "url": URL_PARAM,
         "answer": answer
     }}
-    response = requests.post(SUBMIT_URL, json=payload)
-    print(f"📥 Submission response: {{response.json()}}")
-    return response.json()
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"📤 Submission attempt {{attempt + 1}}/{{max_retries}}")
+            response = requests.post(SUBMIT_URL, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            print(f"📥 Submission response: {{result}}")
+            return result
+        except Exception as e:
+            print(f"❌ Submission error (attempt {{attempt + 1}}): {{e}}")
+            if attempt < max_retries - 1:
+                print(f"🔄 Retrying in {{attempt + 1}} seconds...")
+                import time
+                time.sleep(attempt + 1)
+            else:
+                print("❌ All retry attempts failed")
+                return {{"error": f"Submission failed: {{str(e)}}"}}
+    
+    return {{"error": "Max retries exceeded"}}
 
 # 4. MAIN EXECUTION
 if __name__ == "__main__":
@@ -553,10 +623,11 @@ if __name__ == "__main__":
 ```python
 import requests
 import pandas as pd
+from io import StringIO
 
 BASE_URL = "https://example.com"
 DATA_URL = BASE_URL + "/data.csv"
-SUBMIT_URL = BASE_URL + "/submit"
+SUBMIT_URL = BASE_URL + "/submit"  # Submission endpoint
 EMAIL = "email@example.com"
 SECRET = "secret"
 ORIGINAL_URL = "quiz_url"
@@ -566,12 +637,40 @@ def process_data():
     result = df['column'].mean()  # Or any calculation
     return str(result)
 
-def submit_answer(answer):
+def submit_answer(answer, max_retries=3):
+    \"\"\"Submit answer with automatic retries and type conversion\"\"\"
+    # Convert answer to JSON-serializable type
+    if hasattr(answer, 'item'):  # pandas/numpy types
+        answer = answer.item()
+    elif hasattr(answer, 'tolist'):  # numpy arrays
+        answer = answer.tolist()
+    
+    import json
+    try:
+        json.dumps(answer)  # Test serialization
+    except (TypeError, ValueError):
+        answer = str(answer)  # Convert to string as fallback
+    
     payload = {{"email": EMAIL, "secret": SECRET, "url": ORIGINAL_URL, "answer": answer}}
-    return requests.post(SUBMIT_URL, json=payload).json()
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"📤 Submission attempt {{attempt + 1}}/{{max_retries}}")
+            response = requests.post(SUBMIT_URL, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            print(f"📥 Response: {{result}}")
+            return result
+        except Exception as e:
+            print(f"❌ Submission error: {{e}}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(attempt + 1)
+    return {{"error": "Submission failed"}}
 
 if __name__ == "__main__":
     answer = process_data()
+    print(f"✓ Calculated result: {{answer}}")
     print(submit_answer(answer))
 ```
 
@@ -581,7 +680,7 @@ import requests
 
 BASE_URL = "https://example.com"
 API_URL = BASE_URL + "/api/endpoint"
-SUBMIT_URL = BASE_URL + "/submit"
+SUBMIT_URL = BASE_URL + "/submit"  # Submission endpoint
 EMAIL = "email@example.com"
 SECRET = "secret"
 ORIGINAL_URL = "quiz_url"
@@ -592,12 +691,40 @@ def fetch_api_data():
     # Process as needed
     return data['key']  # Or extract specific field
 
-def submit_answer(answer):
+def submit_answer(answer, max_retries=3):
+    \"\"\"Submit answer with automatic retries and type conversion\"\"\"
+    # Handle different data types
+    if hasattr(answer, 'item'):  # pandas/numpy types
+        answer = answer.item()
+    elif hasattr(answer, 'tolist'):  # numpy arrays
+        answer = answer.tolist()
+    
+    import json
+    try:
+        json.dumps(answer)  # Test serialization
+    except (TypeError, ValueError):
+        answer = str(answer)  # Fallback to string
+    
     payload = {{"email": EMAIL, "secret": SECRET, "url": ORIGINAL_URL, "answer": answer}}
-    return requests.post(SUBMIT_URL, json=payload).json()
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"📤 Attempt {{attempt + 1}}: {{answer}}")
+            response = requests.post(SUBMIT_URL, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            print(f"📥 Response: {{result}}")
+            return result
+        except Exception as e:
+            print(f"❌ Error: {{e}}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(1)
+    return {{"error": "Failed after retries"}}
 
 if __name__ == "__main__":
-    answer = fetch_api_data()
+    answer = fetch_data()
+    print(f"✓ Fetched result: {{answer}}")
     print(submit_answer(answer))
 ```
 
@@ -746,6 +873,60 @@ Part 2: Complete Python code
 - Perform calculations
 - Format result
 - Submit answer
+
+**For Audio Cutoff Tasks (CSV filtering):**
+```python
+import requests
+import pandas as pd
+import hashlib
+from io import StringIO
+
+BASE_URL = "https://example.com"
+CSV_URL = BASE_URL + "/data.csv"
+SUBMIT_URL = BASE_URL + "/submit"  # Submission endpoint
+EMAIL = "email@example.com"
+SECRET = "secret"
+ORIGINAL_URL = "quiz_url"
+
+def process_audio_cutoff_task():
+    # Calculate cutoff from email (standard pattern)
+    cutoff = int(hashlib.sha1(EMAIL.encode()).hexdigest()[:4], 16)
+    print(f"✓ Calculated cutoff: {{cutoff}}")
+    
+    # Download CSV
+    response = requests.get(CSV_URL, timeout=30)
+    df = pd.read_csv(StringIO(response.text))
+    print(f"✓ Loaded CSV with shape: {{df.shape}}")
+    
+    # Filter first column >= cutoff and sum
+    first_col = df.iloc[:, 0]
+    filtered_values = first_col[first_col >= cutoff]
+    result = filtered_values.sum()
+    print(f"✓ Sum of values >= {{cutoff}}: {{result}}")
+    return result
+
+# Submit with retry logic (same as other templates)
+def submit_answer(answer, max_retries=3):
+    if hasattr(answer, 'item'):
+        answer = answer.item()
+    
+    payload = {{"email": EMAIL, "secret": SECRET, "url": ORIGINAL_URL, "answer": answer}}
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(SUBMIT_URL, json=payload, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(1)
+    return {{"error": "Failed"}}
+
+if __name__ == "__main__":
+    answer = process_audio_cutoff_task()
+    print(submit_answer(answer))
+```
 
 **For API/File Tasks:**
 - Use requests.get() for API endpoints

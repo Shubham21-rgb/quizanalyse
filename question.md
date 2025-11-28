@@ -8,9 +8,11 @@
 
 1. **Read SECTION 1 (Text Content)** → Understand what the quiz is asking
 
-2. **Check URL Parameters** → Email, ID, or other values needed for submission
+2. **🎵 For Audio Tasks: Check SECTION 5** → Audio transcriptions contain task instructions!
 
-3. **Look for data sources:**
+3. **Check URL Parameters** → Email, ID, or other values needed for submission
+
+4. **Look for data sources:**
 
    - SECTION 2 (Links) → External files, APIs, data endpoints
 
@@ -18,18 +20,18 @@
 
    - SECTION 6 (Raw HTML) → JavaScript variables, hidden data, Base64
 
-4. **Find submission endpoint** → Look for POST URLs in SECTION 2 or forms in SECTION 6
+5. **Find submission endpoint** → Look for POST URLs in SECTION 2 or forms in SECTION 6
 
-5. **Extract/Process data** → Use appropriate method (scraping, API call, data extraction)
+6. **Extract/Process data** → Use appropriate method (scraping, API call, data extraction)
 
-6. **Format answer** → Match exact JSON structure required
+7. **Format answer** → Match exact JSON structure required
 
-7. **Submit** → POST to the submission endpoint
+8. **Submit** → POST to the submission endpoint
 
 
 ## 🌐 Page Metadata
 
-- **Original URL:** https://tds-llm-analysis.s-anand.net/demo-scrape?email=23f2003481%40ds.study.iitm.ac.in&id=8655
+- **Original URL:** https://tds-llm-analysis.s-anand.net/demo-audio?email=23f2003481%40ds.study.iitm.ac.in&id=23783
 
 - **Content Type:** WEBPAGE
 
@@ -42,7 +44,7 @@
 
 - **Domain:** tds-llm-analysis.s-anand.net
 
-- **Path:** /demo-scrape
+- **Path:** /demo-audio
 
 
 ### 🔑 URL Query Parameters (⚠️ IMPORTANT for task!):
@@ -51,7 +53,7 @@
 
   ⚡ *This parameter may be required for submission!*
 
-- **id:** `8655`
+- **id:** `23783`
 
   ⚡ *This parameter may be required for submission!*
 
@@ -66,22 +68,21 @@
 **⚠️ READ THIS FIRST to understand what the task is asking!**
 
 
-**🎯 Detected Task Keywords:** submit, post, scrape
+**🎯 Detected Task Keywords:** submit, post, json
 
 
 ```text
 
-Scrape
-/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in
-(relative to this page).
-Get the secret code from this page.
-POST the secret code back to
+CSV file
+Cutoff:
+POST to JSON to
 /submit
 {
-  "email": "23f2003481@ds.study.iitm.ac.in",
+  "email": "your email",
   "secret": "your secret",
-  "url": "this page's URL",
-  "answer": "the secret code you scraped"
+  "url": "
+/demo-audio",
+  "answer": ...
 }
 ```
 
@@ -93,19 +94,12 @@ POST the secret code back to
 **⚠️ If task asks to 'scrape' or 'fetch' data, check these URLs!**
 
 
-### ⚡ SUBMISSION ENDPOINTS (CRITICAL!):
 
-1. **[/submit](https://tds-llm-analysis.s-anand.net/submit)**
+### 📊 Data Files:
 
-   - Full URL: `https://tds-llm-analysis.s-anand.net/submit`
+1. [CSV file](https://tds-llm-analysis.s-anand.net/demo-audio-data.csv)
 
-
-⚠️ **Use these URLs to POST your answer!**
-
-
-### 🔗 Other Links:
-
-1. /demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in → https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in
+   - Type: CSV
 
 
 ## 📊 SECTION 3: Tables & Structured Data
@@ -116,6 +110,58 @@ POST the secret code back to
 
 
 *No tables found*
+
+
+## 🎵 SECTION 5: Audio Files & Transcriptions
+
+**→ Audio files found and their transcriptions (if available).**
+
+
+⚠️ **AUDIO TASK DETECTED**: The transcriptions below contain CRITICAL task instructions!
+
+**Read both SECTION 1 and SECTION 5 transcriptions together for complete understanding.**
+
+
+### Audio Files:
+
+1. https://tds-llm-analysis.s-anand.net/demo-audio.opus
+
+
+
+### Audio Transcriptions:
+
+**Audio 1:** https://tds-llm-analysis.s-anand.net/demo-audio.opus
+
+**Status:** success
+
+**Transcription:**
+```
+you need to download the csv file provided pick the first column and at all values greater than or equal to the cutoff value provid
+```
+
+⚠️ **INCOMPLETE TRANSCRIPTION DETECTED**: Audio ends with 'provid' (likely 'provided')
+
+💡 **TASK INTERPRETATION**: Based on context, the complete instruction is likely:
+
+*'You need to download the csv file provided, pick the first column and add all values greater than or equal to the cutoff value provided.'*
+
+🎯 **CUTOFF VALUE**: Calculate using SHA1 hash of email (first 4 hex chars → int)
+
+📊 **EXPECTED PROCESS**:
+
+1. Calculate cutoff: `int(hashlib.sha1(email.encode()).hexdigest()[:4], 16)`
+
+2. Download CSV file from links in SECTION 2
+
+3. Filter first column: keep values >= cutoff
+
+4. Sum the filtered values
+
+5. Submit the sum as your answer
+
+
+🎯 **This transcription contains task instructions - use it with SECTION 1!**
+
 
 
 ## 🔍 SECTION 6: Raw HTML Source Code
@@ -136,31 +182,33 @@ POST the secret code back to
 - Find submission endpoints in <form> action attributes or fetch() calls
 
 
-**🔍 Detected in HTML:** JavaScript, Base64 encoding/decoding
+**🔍 Detected in HTML:** JavaScript
 
 
 ```html
 
-<html><head></head><body><div id="question">Scrape <a href="/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in">/demo-scrape-data?email=23f2003481@ds.study.iitm.ac.in</a> (relative to this page).
-Get the secret code from this page.
-POST the secret code back to <a href="/submit">/submit</a>
+<html><head></head><body><p><audio src="demo-audio.opus" controls=""></audio></p>
+
+<p><a href="demo-audio-data.csv">CSV file</a></p>
+<p>Cutoff: <span id="cutoff"></span></p>
+
+<p>POST to JSON to <span class="origin"></span>/submit</p>
 
 <pre>{
-  "email": "23f2003481@ds.study.iitm.ac.in",
+  "email": "your email",
   "secret": "your secret",
-  "url": "this page's URL",
-  "answer": "the secret code you scraped"
+  "url": "<span class="origin"></span>/demo-audio",
+  "answer": ...
 }
-</pre></div>
+</pre>
 
-<script>
-const urlParams = new URLSearchParams(location.search.replace(/^\?/, ""));
-const email = urlParams.get("email");
-const code = `U2NyYXBlIDxhIGhyZWY9Ii9kZW1vLXNjcmFwZS1kYXRhP2VtYWlsPSRFTUFJTCI+L2RlbW8tc2NyYXBlLWRhdGE/ZW1haWw9JEVNQUlMPC9hPiAocmVsYXRpdmUgdG8gdGhpcyBwYWdlKS4KR2V0IHRoZSBzZWNyZXQgY29kZSBmcm9tIHRoaXMgcGFnZS4KUE9TVCB0aGUgc2VjcmV0IGNvZGUgYmFjayB0byA8YSBocmVmPSIvc3VibWl0Ij4vc3VibWl0PC9hPgoKPHByZT4KewogICJlbWFpbCI6ICIkRU1BSUwiLAogICJzZWNyZXQiOiAieW91ciBzZWNyZXQiLAogICJ1cmwiOiAidGhpcyBwYWdlJ3MgVVJMIiwKICAiYW5zd2VyIjogInRoZSBzZWNyZXQgY29kZSB5b3Ugc2NyYXBlZCIKfQo8L3ByZT4=`;
-const content = email
-  ? atob(code).replace(/\$EMAIL/g, email)
-  : "Please provide ?email=";
-document.querySelector("#question").innerHTML = content;
+<script type="module">
+import { emailNumber, getEmail, sha1 } from "./utils.js";
+document.querySelector("#cutoff").innerHTML = (await emailNumber())
+  || "Please provide ?email=";
+for (const el of document.querySelectorAll(".origin")) {
+  el.innerHTML = window.location.origin;
+}
 </script>
 </body></html>
 

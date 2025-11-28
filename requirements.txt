@@ -16,3 +16,6 @@ langchain
 langchain-openai
 langchain-community
 langchain-core
+SpeechRecognition
+pydub
+playwright
